@@ -237,7 +237,7 @@ st.markdown(
         font-size: 0.82rem;
         line-height: 1.45;
     }
-    .help-card, .method-card {
+    .help-card {
         background: rgba(255, 255, 255, 0.018);
         border: 1px solid var(--line);
         border-left: 2px solid var(--teal);
@@ -248,14 +248,7 @@ st.markdown(
         line-height: 1.55;
         margin: 8px 0 14px;
     }
-    .help-card strong, .method-card strong { color: var(--paper); }
-    .help-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-        margin: 6px 0 18px;
-    }
-    .help-grid .method-card { margin: 0; min-height: 126px; }
+    .help-card strong { color: var(--paper); }
     .compact-wrap {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -345,7 +338,6 @@ st.markdown(
     #MainMenu { visibility: hidden; }
     @media (max-width: 1180px) {
         .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .help-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
         .kpi-grid { grid-template-columns: 1fr; }
@@ -828,13 +820,13 @@ elif delta < -10:
 else:
     st.info(f"Debt ratio changes by {delta:.1f} points over {horizon} years. The scenario is broadly stable.")
 
-st.markdown("## Methode et securite")
+st.markdown("## Sources et couverture")
 st.markdown(
     """
-    <div class="help-grid">
-      <div class="method-card"><strong>Sources.</strong><br>Les donnees institutionnelles viennent de Treasury Fiscal Data, BIS, CBO, Eurostat, World Bank et FRED. Les prix et ratios de marche passent par Massive quand la cle est presente.</div>
-      <div class="method-card"><strong>Secrets.</strong><br>Les cles restent cote serveur via variables d'environnement ou secrets Streamlit. Les erreurs sont redigees pour eviter d'afficher une cle API.</div>
-      <div class="method-card"><strong>Deploiement.</strong><br>L'app doit ecouter seulement sur 127.0.0.1 et etre exposee par Apache en reverse proxy TLS, avec service systemd durci.</div>
+    <div class="help-card">
+      <strong>Lecture des sources.</strong> Les donnees institutionnelles viennent de Treasury Fiscal Data,
+      BIS, CBO, Eurostat, World Bank et FRED. Les prix et ratios de marche passent par Massive quand la cle
+      est presente. Les flux absents sont signales plus haut et exclus du score sans bloquer le reste du radar.
     </div>
     """,
     unsafe_allow_html=True,
