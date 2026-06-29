@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -eu
+
+python3 scripts/secret_scan.py --staged
+git diff --cached --check

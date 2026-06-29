@@ -1,0 +1,11 @@
+title = "Debt Risk Radar gitleaks allowlist"
+
+[allowlist]
+description = "Allow documented placeholder variables only."
+regexes = [
+  '''FRED_API_KEY=''',
+  '''MASSIVE_API_KEY=''',
+  '''MASSIVE_BASE_URL=https://api\.massive\.com''',
+  '''ta_cle_fred''',
+  '''ta_cle_massive''',
+]
