@@ -8,6 +8,7 @@ Run with:
 from __future__ import annotations
 
 import html
+import os
 from datetime import datetime
 
 import numpy as np
@@ -41,6 +42,40 @@ from data import (
     treasury_daily_metrics,
     world_bank_metrics,
 )
+
+
+def env_int(name: str, default: int, minimum: int | None = None) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None:
+        value = max(value, minimum)
+    return value
+
+
+AUTO_REFRESH_SECONDS = env_int("DEBT_RISK_RADAR_AUTO_REFRESH_SECONDS", 15 * 60, minimum=60)
+AUTO_REFRESH_PARAM = "_drr_auto_refresh"
+
+
+def install_auto_refresh(seconds: int = AUTO_REFRESH_SECONDS) -> None:
+    refresh_marker = st.query_params.get(AUTO_REFRESH_PARAM)
+    if refresh_marker and st.session_state.get("last_auto_refresh_marker") != refresh_marker:
+        st.cache_data.clear()
+        st.session_state["last_auto_refresh_marker"] = refresh_marker
+
+    st.html(
+        f"""
+        <script>
+        window.setTimeout(function () {{
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set("{AUTO_REFRESH_PARAM}", Date.now().toString());
+            window.parent.location.replace(url.toString());
+        }}, {seconds * 1000});
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
 
 
 st.set_page_config(
@@ -240,6 +275,60 @@ st.markdown(
         font-size: 0.72rem;
         margin-top: 4px;
     }
+    .risk-table {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--panel2);
+        margin-top: 14px;
+    }
+    .risk-row {
+        display: grid;
+        grid-template-columns: minmax(132px, .95fr) minmax(260px, 2.05fr) minmax(96px, .55fr) minmax(84px, .45fr) minmax(126px, .7fr);
+        border-top: 1px solid var(--line-soft);
+        align-items: stretch;
+    }
+    .risk-row:first-child { border-top: 0; }
+    .risk-head {
+        background: rgba(122, 162, 247, 0.08);
+        color: var(--dim);
+        text-transform: uppercase;
+        font-size: 0.68rem;
+        letter-spacing: 0.07em;
+    }
+    .risk-cell {
+        min-width: 0;
+        padding: 10px 12px;
+        border-left: 1px solid var(--line-soft);
+        overflow-wrap: anywhere;
+        word-break: normal;
+        color: var(--text);
+        font-size: 0.84rem;
+        line-height: 1.35;
+        font-variant-numeric: tabular-nums;
+    }
+    .risk-cell:first-child { border-left: 0; }
+    .risk-family { color: var(--paper); font-weight: 700; }
+    .risk-muted { color: var(--dim); }
+    .risk-score {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 10px;
+    }
+    .risk-bar {
+        height: 8px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.10);
+    }
+    .risk-bar span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--teal);
+        box-shadow: 0 0 12px rgba(94, 234, 212, 0.3);
+    }
     div[data-testid="stDataFrame"] {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -261,6 +350,25 @@ st.markdown(
     @media (max-width: 720px) {
         .kpi-grid { grid-template-columns: 1fr; }
         .status-pill { margin-left: 0; }
+        .risk-head { display: none; }
+        .risk-row {
+            grid-template-columns: 1fr;
+            padding: 8px 0;
+        }
+        .risk-cell {
+            border-left: 0;
+            display: grid;
+            grid-template-columns: 94px minmax(0, 1fr);
+            gap: 10px;
+            padding: 5px 12px;
+        }
+        .risk-cell::before {
+            content: attr(data-label);
+            color: var(--dim);
+            text-transform: uppercase;
+            font-size: 0.66rem;
+            letter-spacing: 0.06em;
+        }
     }
 </style>
 """,
@@ -288,6 +396,39 @@ def format_number(value: float, unit: str = "") -> str:
     if abs(value) >= 1000:
         return f"{value:,.0f} {unit}".strip()
     return f"{value:,.2f} {unit}".strip()
+
+
+def risk_table_html(table: pd.DataFrame, limit: int = 16) -> str:
+    rows = [
+        '<div class="risk-row risk-head">'
+        '<div class="risk-cell">famille</div>'
+        '<div class="risk-cell">signal</div>'
+        '<div class="risk-cell">valeur</div>'
+        '<div class="risk-cell">unite</div>'
+        '<div class="risk-cell">risque</div>'
+        "</div>"
+    ]
+    for _, row in table.head(limit).iterrows():
+        risk_score = float(row["risk_score"]) if pd.notna(row["risk_score"]) else 0.0
+        width = max(0.0, min(100.0, risk_score))
+        rows.append(
+            '<div class="risk-row">'
+            f'<div class="risk-cell risk-family" data-label="famille">{html.escape(str(row["famille"]))}</div>'
+            '<div class="risk-cell" data-label="signal">'
+            f'{html.escape(str(row["name"]))}'
+            f'<div class="detail-meta">{html.escape(str(row["source"]))} · {html.escape(str(row["date"]))}</div>'
+            "</div>"
+            f'<div class="risk-cell" data-label="valeur">{format_number(float(row["current"]))}</div>'
+            f'<div class="risk-cell risk-muted" data-label="unite">{html.escape(str(row["unit"]))}</div>'
+            '<div class="risk-cell" data-label="risque">'
+            '<div class="risk-score">'
+            f'<div class="risk-bar"><span style="width:{width:.0f}%"></span></div>'
+            f"<strong>{risk_score:.0f}</strong>"
+            "</div>"
+            "</div>"
+            "</div>"
+        )
+    return f'<div class="risk-table">{"".join(rows)}</div>'
 
 
 def chart_layout(fig: go.Figure, title: str, height: int = 360, yaxis_title: str | None = None) -> go.Figure:
@@ -322,9 +463,7 @@ with st.sidebar:
     )
     fred_start = st.date_input("FRED start date", value=pd.Timestamp("1990-01-01"))
     treasury_start = st.date_input("Treasury daily start", value=pd.Timestamp("2015-01-01"))
-    if st.button("Refresh data", width="stretch"):
-        st.cache_data.clear()
-        st.rerun()
+    st.caption(f"Auto-refresh toutes les {AUTO_REFRESH_SECONDS // 60} min.")
 
     st.divider()
     st.caption("Data policy")
@@ -339,6 +478,8 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+
+install_auto_refresh()
 
 st.markdown(
     f"""
@@ -441,75 +582,47 @@ if metrics.empty:
     st.warning("No data loaded yet. Check network access and API keys.")
     st.stop()
 
-left, right = st.columns([1.05, 1.55])
+bucket_view = buckets.copy()
+bucket_view["bucket_label"] = bucket_view["bucket"].map(BUCKET_LABELS).fillna(bucket_view["bucket"])
+fig_bucket = go.Figure(
+    go.Bar(
+        x=round(bucket_view["score"], 1),
+        y=bucket_view["bucket_label"],
+        orientation="h",
+        marker=dict(color=[score_color(v) for v in bucket_view["score"]]),
+        text=[f"{v:.1f}" for v in bucket_view["score"]],
+        textposition="outside",
+    )
+)
+fig_bucket.add_vline(x=WATCH_LEVEL, line_width=1, line_dash="dot", line_color="#f5b13d")
+fig_bucket.add_vline(x=STRESS_LEVEL, line_width=1, line_dash="dot", line_color="#ff4d87")
+fig_bucket.update_layout(
+    height=390,
+    xaxis=dict(range=[0, 100], title="Risk score"),
+    yaxis=dict(autorange="reversed"),
+    margin=dict(l=10, r=24, t=20, b=10),
+    paper_bgcolor="#1a1a1a",
+    plot_bgcolor="#1a1a1a",
+    font=dict(color="#b8fff5"),
+)
+st.plotly_chart(fig_bucket, width="stretch")
 
-with left:
-    bucket_view = buckets.copy()
-    bucket_view["bucket_label"] = bucket_view["bucket"].map(BUCKET_LABELS).fillna(bucket_view["bucket"])
-    fig_bucket = go.Figure(
-        go.Bar(
-            x=round(bucket_view["score"], 1),
-            y=bucket_view["bucket_label"],
-            orientation="h",
-            marker=dict(color=[score_color(v) for v in bucket_view["score"]]),
-            text=[f"{v:.1f}" for v in bucket_view["score"]],
-            textposition="outside",
+table = metrics.sort_values("risk_score", ascending=False).copy()
+table["famille"] = table["bucket"].map(BUCKET_LABELS).fillna(table["bucket"])
+table["date"] = table["date"].dt.strftime("%Y-%m-%d")
+st.markdown(risk_table_html(table), unsafe_allow_html=True)
+with st.expander("Lire les signaux et les sources", expanded=False):
+    for _, row in table.head(12).iterrows():
+        st.markdown(
+            f"""
+            <div class="detail-item">
+              <strong>{html.escape(str(row['name']))}</strong> · score {row['risk_score']:.0f}<br>
+              {html.escape(str(row['rationale']))}
+              <div class="detail-meta">{html.escape(str(row['source']))} · {html.escape(str(row['series_id']))} · {html.escape(str(row['date']))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    )
-    fig_bucket.add_vline(x=WATCH_LEVEL, line_width=1, line_dash="dot", line_color="#f5b13d")
-    fig_bucket.add_vline(x=STRESS_LEVEL, line_width=1, line_dash="dot", line_color="#ff4d87")
-    fig_bucket.update_layout(
-        height=360,
-        xaxis=dict(range=[0, 100], title="Risk score"),
-        yaxis=dict(autorange="reversed"),
-        margin=dict(l=10, r=24, t=20, b=10),
-        paper_bgcolor="#1a1a1a",
-        plot_bgcolor="#1a1a1a",
-        font=dict(color="#b8fff5"),
-    )
-    st.plotly_chart(fig_bucket, width="stretch")
-
-with right:
-    table = metrics.sort_values("risk_score", ascending=False).copy()
-    table["famille"] = table["bucket"].map(BUCKET_LABELS).fillna(table["bucket"])
-    table["signal"] = table["name"].str.slice(0, 42)
-    table["date"] = table["date"].dt.strftime("%Y-%m-%d")
-    st.dataframe(
-        table[
-            [
-                "famille",
-                "signal",
-                "current",
-                "unit",
-                "risk_score",
-                "date",
-                "source",
-            ]
-        ],
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "famille": st.column_config.TextColumn("famille", width="medium"),
-            "signal": st.column_config.TextColumn("signal", width="medium"),
-            "current": st.column_config.NumberColumn("valeur", format="%.2f", width="small"),
-            "unit": st.column_config.TextColumn("unite", width="small"),
-            "risk_score": st.column_config.ProgressColumn("risque", min_value=0, max_value=100, format="%.0f", width="small"),
-            "date": st.column_config.TextColumn("date", width="small"),
-            "source": st.column_config.TextColumn("source", width="small"),
-        },
-    )
-    with st.expander("Lire les signaux et les sources", expanded=False):
-        for _, row in table.head(12).iterrows():
-            st.markdown(
-                f"""
-                <div class="detail-item">
-                  <strong>{html.escape(str(row['name']))}</strong> · score {row['risk_score']:.0f}<br>
-                  {html.escape(str(row['rationale']))}
-                  <div class="detail-meta">{html.escape(str(row['source']))} · {html.escape(str(row['series_id']))} · {html.escape(str(row['date']))}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
 
 st.markdown("## Dette et marche")
 st.markdown(
