@@ -136,7 +136,7 @@ Principes non negociables :
 - Les secrets restent dans `/etc/debt-risk-radar.env`, jamais dans le repo.
 - Le hook Git local pointe vers `.githooks` pour bloquer les secrets avant commit.
 - Le service tourne avec l'utilisateur systeme `debt-radar`, pas root.
-- Le port `8501` reste ferme depuis Internet.
+- Le port applicatif local, `8502` en production, reste ferme depuis Internet.
 
 Active les hooks locaux une fois par clone :
 
