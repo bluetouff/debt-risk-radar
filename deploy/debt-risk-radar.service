@@ -10,7 +10,7 @@ Group=debt-radar
 WorkingDirectory=/opt/debt-risk-radar
 EnvironmentFile=/etc/debt-risk-radar.env
 Environment=HOME=/var/lib/debt-risk-radar
-ExecStart=/opt/debt-risk-radar/.venv/bin/streamlit run /opt/debt-risk-radar/app.py --server.address 127.0.0.1 --server.port 8501 --server.headless true --browser.gatherUsageStats false
+ExecStart=/opt/debt-risk-radar/.venv/bin/streamlit run /opt/debt-risk-radar/app.py --server.address 127.0.0.1 --server.port 8502 --server.headless true --browser.gatherUsageStats false
 Restart=on-failure
 RestartSec=5
 UMask=0077

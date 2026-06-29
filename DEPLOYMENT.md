@@ -13,10 +13,12 @@ sudo install -d -o debt-radar -g debt-radar -m 755 /opt/debt-risk-radar
 ## 2. Code et venv
 
 ```bash
+export DEBT_RISK_RADAR_SRC="$HOME/debt-risk-radar"
+
 sudo rsync -a --delete \
   --exclude .venv \
   --exclude __pycache__ \
-  /home/bluetouff/debt-risk-radar/ /opt/debt-risk-radar/
+  "$DEBT_RISK_RADAR_SRC"/ /opt/debt-risk-radar/
 
 sudo chown -R root:root /opt/debt-risk-radar
 sudo python3 -m venv /opt/debt-risk-radar/.venv
@@ -44,7 +46,7 @@ sudo systemctl enable --now debt-risk-radar
 sudo systemctl status debt-risk-radar
 ```
 
-Le service ecoute uniquement sur `127.0.0.1:8501`.
+Le service ecoute uniquement sur `127.0.0.1:8502`.
 
 ## 5. Apache reverse proxy
 
@@ -70,13 +72,13 @@ sudo ufw allow "Apache Full"
 sudo ufw enable
 ```
 
-Le port `8501` ne doit jamais etre ouvert publiquement.
+Le port `8502` ne doit jamais etre ouvert publiquement.
 
 ## 7. Verification
 
 ```bash
 curl -I https://debt.l0g.fr/
-curl -sS http://127.0.0.1:8501/_stcore/health
+curl -sS http://127.0.0.1:8502/_stcore/health
 sudo journalctl -u debt-risk-radar -n 100 --no-pager
 ```
 
@@ -92,10 +94,12 @@ Controle attendu :
 ## 8. Mise a jour
 
 ```bash
+export DEBT_RISK_RADAR_SRC="$HOME/debt-risk-radar"
+
 sudo rsync -a --delete \
   --exclude .venv \
   --exclude __pycache__ \
-  /home/bluetouff/debt-risk-radar/ /opt/debt-risk-radar/
+  "$DEBT_RISK_RADAR_SRC"/ /opt/debt-risk-radar/
 sudo chown -R root:root /opt/debt-risk-radar
 sudo systemctl restart debt-risk-radar
 ```

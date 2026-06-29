@@ -20,7 +20,8 @@ La V1 est centree sur les Etats-Unis, parce que les sources ouvertes y sont les 
 ## Installation
 
 ```bash
-cd /Users/bluetouff/Desktop/DEV/debt_risk_radar
+git clone https://github.com/bluetouff/debt-risk-radar.git
+cd debt-risk-radar
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -60,7 +61,7 @@ En local comme en prod, la configuration Streamlit fournie force l'ecoute sur `1
 ## Structure
 
 ```text
-debt_risk_radar/
+debt-risk-radar/
 ├── app.py             # UI Streamlit
 ├── catalog.py         # Series, sources, poids, directions de risque
 ├── data.py            # Connecteurs, normalisation, scoring, scenarios
