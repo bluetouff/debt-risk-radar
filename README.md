@@ -143,3 +143,7 @@ Active les hooks locaux une fois par clone :
 ```bash
 git config core.hooksPath .githooks
 ```
+
+## Licence
+
+MIT. Voir [LICENSE](LICENSE).

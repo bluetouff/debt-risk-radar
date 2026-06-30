@@ -387,6 +387,33 @@ st.markdown(
         border: 1px solid var(--line);
         border-radius: 10px;
     }
+    .site-footer {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 34px;
+        padding: 18px 0 6px;
+        border-top: 1px solid var(--line);
+        color: var(--faint);
+        font-size: 0.72rem;
+    }
+    .l0g-logo {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 2px;
+        color: var(--bright) !important;
+        font-weight: 800;
+        text-decoration: none !important;
+        letter-spacing: 0;
+    }
+    .l0g-logo .slash {
+        color: var(--teal);
+    }
+    .l0g-logo:hover {
+        color: var(--teal) !important;
+    }
     footer { visibility: hidden; }
     #MainMenu { visibility: hidden; }
     @media (max-width: 1180px) {
@@ -514,6 +541,20 @@ def render_header(view: str) -> None:
     )
 
 
+def render_site_footer() -> None:
+    st.markdown(
+        """
+        <div class="site-footer">
+          <a class="l0g-logo" href="https://l0g.fr" target="_blank" rel="noopener" aria-label="l0g.fr">
+            <span class="slash">//</span><span>l0g.fr</span>
+          </a>
+          <span>Debt Risk Radar · MIT License</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_faq_page() -> None:
     st.markdown("## Aide / FAQ")
     st.markdown(
@@ -636,6 +677,7 @@ render_header(view)
 
 if view == "faq":
     render_faq_page()
+    render_site_footer()
     st.stop()
 
 install_auto_refresh()
@@ -1015,3 +1057,5 @@ st.dataframe(
         "max_risk": st.column_config.ProgressColumn("risque max", min_value=0, max_value=100, format="%.0f", width="small"),
     },
 )
+
+render_site_footer()
