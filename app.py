@@ -8,11 +8,8 @@ Run with:
 from __future__ import annotations
 
 import html
-import json
 import os
-import tempfile
-from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -22,7 +19,6 @@ import streamlit as st
 
 from catalog import BUCKET_LABELS, WATCH_LEVEL, STRESS_LEVEL
 from data import (
-    DataIssue,
     bis_credit_metrics,
     bucket_scores,
     build_debt_dynamics_projection,
@@ -44,6 +40,7 @@ from data import (
     treasury_daily_metrics,
     world_bank_metrics,
 )
+from latest_export import build_latest_payload, write_latest_json
 
 
 def env_int(name: str, default: int, minimum: int | None = None) -> int:
@@ -59,8 +56,6 @@ def env_int(name: str, default: int, minimum: int | None = None) -> int:
 AUTO_REFRESH_SECONDS = env_int("DEBT_RISK_RADAR_AUTO_REFRESH_SECONDS", 15 * 60, minimum=60)
 AUTO_REFRESH_PARAM = "_drr_auto_refresh"
 VIEW_PARAM = "view"
-LATEST_JSON_PATH = os.environ.get("DEBT_RISK_RADAR_LATEST_JSON", "/var/www/debt-risk-radar/latest.json")
-LATEST_JSON_TOP_SIGNALS = env_int("DEBT_RISK_RADAR_LATEST_JSON_TOP_SIGNALS", 20, minimum=1)
 DEFAULT_COUNTRY = "USA"
 DEFAULT_FRED_START = "1990-01-01"
 DEFAULT_TREASURY_START = "2015-01-01"
@@ -472,145 +467,6 @@ def format_number(value: float, unit: str = "") -> str:
     if abs(value) >= 1000:
         return f"{value:,.0f} {unit}".strip()
     return f"{value:,.2f} {unit}".strip()
-
-
-def json_value(value):
-    if value is None:
-        return None
-    if isinstance(value, pd.Timestamp):
-        return None if pd.isna(value) else value.isoformat()
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, float):
-        return value if np.isfinite(value) else None
-    if pd.isna(value):
-        return None
-    return value
-
-
-def json_date(value) -> str | None:
-    if value is None or pd.isna(value):
-        return None
-    timestamp = pd.Timestamp(value)
-    return timestamp.date().isoformat()
-
-
-def metric_record(row: pd.Series) -> dict:
-    return {
-        "bucket": str(row["bucket"]),
-        "family": BUCKET_LABELS.get(str(row["bucket"]), str(row["bucket"])),
-        "series_id": str(row["series_id"]),
-        "name": str(row["name"]),
-        "unit": str(row["unit"]),
-        "date": json_date(row["date"]),
-        "current": json_value(float(row["current"])) if pd.notna(row["current"]) else None,
-        "signed_z": json_value(float(row["signed_z"])) if pd.notna(row["signed_z"]) else None,
-        "risk_score": json_value(float(row["risk_score"])) if pd.notna(row["risk_score"]) else None,
-        "source": str(row["source"]),
-        "rationale": str(row["rationale"]),
-    }
-
-
-def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue]) -> dict:
-    generated_at = datetime.now(timezone.utc).replace(microsecond=0)
-    overall = overall_score(buckets)
-    source_rows = []
-    if not metrics.empty:
-        source_audit = (
-            metrics.groupby("source")
-            .agg(metrics=("series_id", "count"), latest_date=("date", "max"), max_risk=("risk_score", "max"))
-            .reset_index()
-            .sort_values("metrics", ascending=False)
-        )
-        for _, row in source_audit.iterrows():
-            source_rows.append(
-                {
-                    "source": str(row["source"]),
-                    "metrics": int(row["metrics"]),
-                    "latest_date": json_date(row["latest_date"]),
-                    "max_risk": json_value(float(row["max_risk"])) if pd.notna(row["max_risk"]) else None,
-                }
-            )
-
-    bucket_rows = []
-    if not buckets.empty:
-        for _, row in buckets.sort_values("score", ascending=False).iterrows():
-            score = float(row["score"]) if pd.notna(row["score"]) else np.nan
-            bucket_rows.append(
-                {
-                    "bucket": str(row["bucket"]),
-                    "label": BUCKET_LABELS.get(str(row["bucket"]), str(row["bucket"])),
-                    "score": json_value(score),
-                    "status": score_label(score),
-                    "weight": json_value(float(row["weight"])) if pd.notna(row["weight"]) else None,
-                    "metrics": int(row["n"]),
-                }
-            )
-
-    top_rows = []
-    if not metrics.empty:
-        top_metrics = metrics.sort_values("risk_score", ascending=False).head(LATEST_JSON_TOP_SIGNALS)
-        top_rows = [metric_record(row) for _, row in top_metrics.iterrows()]
-
-    return {
-        "schema_version": "1.0",
-        "name": "Debt Risk Radar",
-        "description": "Machine-readable snapshot of the public US debt risk dashboard.",
-        "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
-        "public_url": "https://debt.l0g.fr/",
-        "latest_json_url": "https://debt.l0g.fr/latest.json",
-        "scope": {
-            "country": DEFAULT_COUNTRY,
-            "focus": "US sovereign debt, fiscal projections, private credit, liquidity and market stress.",
-            "market_data": "FRED and Massive Market Data are used when server-side keys are configured.",
-        },
-        "thresholds": {
-            "watch": WATCH_LEVEL,
-            "stress": STRESS_LEVEL,
-        },
-        "refresh": {
-            "auto_refresh_seconds": AUTO_REFRESH_SECONDS,
-            "source_ttl_seconds": {
-                "market": 6 * 3600,
-                "institutional": 24 * 3600,
-            },
-        },
-        "score": {
-            "overall": json_value(float(overall)) if pd.notna(overall) else None,
-            "status": score_label(overall),
-            "buckets": bucket_rows,
-        },
-        "top_signals": top_rows,
-        "sources": source_rows,
-        "issues": [{"source": issue.source, "detail": issue.detail} for issue in issues],
-    }
-
-
-def write_latest_json(payload: dict, output_path: str = LATEST_JSON_PATH) -> DataIssue | None:
-    if not output_path:
-        return None
-
-    path = Path(output_path)
-    tmp_name = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as tmp:
-            tmp_name = tmp.name
-            json.dump(payload, tmp, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
-            tmp.write("\n")
-        os.chmod(tmp_name, 0o644)
-        os.replace(tmp_name, path)
-        os.chmod(path, 0o644)
-    except Exception:
-        if tmp_name:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-        return DataIssue("latest.json", "Public JSON export was skipped; check output path permissions.")
-    return None
 
 
 def risk_table_html(table: pd.DataFrame, limit: int = 16) -> str:

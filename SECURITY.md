@@ -4,7 +4,7 @@
 
 - L'application n'ecoute qu'en local : `127.0.0.1:8502`.
 - Apache termine TLS et expose le service au public.
-- Apache sert `/latest.json` comme fichier statique public genere par l'app.
+- Apache sert `/latest.json` comme fichier statique public genere par un service systemd oneshot.
 - Les cles API sont lues depuis l'environnement serveur ou les secrets Streamlit.
 - Les erreurs upstream sont redigees avant affichage pour eviter les fuites de secrets.
 - Massive Market Data est appele avec `Authorization: Bearer`, jamais avec une cle en query string.
@@ -51,6 +51,9 @@ Utiliser le service systemd fourni :
 - `CapabilityBoundingSet=`
 - `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`
 - ecriture limitee a `/var/lib/debt-risk-radar` et `/var/www/debt-risk-radar`
+
+Le timer `debt-risk-radar-export.timer` rafraichit le JSON avec le meme utilisateur systeme
+`debt-radar`, sans exposer Streamlit ni ajouter de port public.
 
 ## Avant exposition publique
 

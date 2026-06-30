@@ -41,6 +41,12 @@ class DataIssue:
     detail: str
 
 
+def cache_data(*args, **kwargs):
+    if os.environ.get("DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE") == "1":
+        return lambda func: func
+    return st.cache_data(*args, **kwargs)
+
+
 def _secret_values() -> List[str]:
     values = []
     for name in ["FRED_API_KEY", "MASSIVE_API_KEY"]:
@@ -90,7 +96,7 @@ def iter_fred_catalog() -> Iterable[Tuple[str, str, dict]]:
             yield bucket, series_id, meta
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], List[DataIssue]]:
     if not fred_key_available():
         return {}, [DataIssue("FRED", "FRED_API_KEY missing. FRED metrics skipped.")]
@@ -123,7 +129,7 @@ def _fiscaldata_get(url: str, params: dict) -> dict:
     return payload
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_treasury_debt(start: str = "2015-01-01") -> Tuple[pd.DataFrame, List[DataIssue]]:
     endpoint = TREASURY_ENDPOINTS["debt_to_penny"]
     params = {
@@ -148,7 +154,7 @@ def fetch_treasury_debt(start: str = "2015-01-01") -> Tuple[pd.DataFrame, List[D
         return pd.DataFrame(), [DataIssue(endpoint["source"], _safe_error(exc))]
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner=False)
+@cache_data(ttl=24 * 3600, show_spinner=False)
 def fetch_world_bank(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue]]:
     rows = []
     issues: List[DataIssue] = []
@@ -201,7 +207,7 @@ def _download_bis_flat_csv(url: str) -> pd.DataFrame:
     return pd.read_csv(archive.open(csv_names[0]))
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner=False)
+@cache_data(ttl=24 * 3600, show_spinner=False)
 def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue]]:
     bis_country = BIS_COUNTRY_MAP.get(country)
     if not bis_country:
@@ -262,7 +268,7 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
     return pd.DataFrame(rows), issues
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner=False)
+@cache_data(ttl=24 * 3600, show_spinner=False)
 def fetch_cbo_projections() -> Tuple[pd.DataFrame, List[DataIssue]]:
     dataset = CBO_DATASETS["long_term_budget"]
     try:
@@ -286,7 +292,7 @@ def _massive_session() -> requests.Session:
     return session
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_massive_market(days: int = 730) -> Tuple[Dict[str, pd.Series], List[DataIssue]]:
     if not massive_key_available():
         return {}, [DataIssue("Massive Market Data", "MASSIVE_API_KEY missing. Market price metrics skipped.")]

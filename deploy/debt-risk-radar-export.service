@@ -1,0 +1,34 @@
+[Unit]
+Description=Generate Debt Risk Radar latest.json
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=debt-radar
+Group=debt-radar
+WorkingDirectory=/opt/debt-risk-radar
+EnvironmentFile=/etc/debt-risk-radar.env
+Environment=HOME=/var/lib/debt-risk-radar
+Environment=DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE=1
+ExecStart=/opt/debt-risk-radar/.venv/bin/python /opt/debt-risk-radar/latest_export.py --output /var/www/debt-risk-radar/latest.json
+UMask=0022
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/debt-risk-radar /var/www/debt-risk-radar
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true

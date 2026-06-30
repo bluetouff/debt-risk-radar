@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Debt Risk Radar latest.json
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=debt-risk-radar-export.service
+
+[Install]
+WantedBy=timers.target

@@ -72,6 +72,7 @@ https://debt.l0g.fr/latest.json
 ```
 
 Le JSON expose le score global, les scores par famille, les principaux signaux, les sources chargees, les seuils et les flux manquants. Il ne contient jamais de cle API.
+Il est genere par `latest_export.py` et rafraichi par un timer systemd dedie, sans dependance a une visite navigateur.
 
 ## Structure
 
@@ -80,6 +81,7 @@ debt-risk-radar/
 ├── app.py             # UI Streamlit
 ├── catalog.py         # Series, sources, poids, directions de risque
 ├── data.py            # Connecteurs, normalisation, scoring, scenarios
+├── latest_export.py   # Generation du snapshot public latest.json
 ├── DEPLOYMENT.md      # Runbook Debian + Apache + systemd durci
 ├── SECURITY.md        # Modele de securite et checklist
 ├── scripts/           # Checks locaux, dont scan anti-secrets

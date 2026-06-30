@@ -42,14 +42,19 @@ Ne mets jamais `FRED_API_KEY` ou `MASSIVE_API_KEY` dans le code, les logs, l'his
 
 ```bash
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar.service /etc/systemd/system/debt-risk-radar.service
+sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.service /etc/systemd/system/debt-risk-radar-export.service
+sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.timer /etc/systemd/system/debt-risk-radar-export.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now debt-risk-radar
+sudo systemctl enable --now debt-risk-radar-export.timer
+sudo systemctl start debt-risk-radar-export.service
 sudo systemctl status debt-risk-radar
 ```
 
 Le service ecoute uniquement sur `127.0.0.1:8502`.
 
-Le fichier machine-readable public est ecrit dans `/var/www/debt-risk-radar/latest.json`.
+Le fichier machine-readable public est ecrit dans `/var/www/debt-risk-radar/latest.json` par
+`debt-risk-radar-export.service`, puis rafraichi par `debt-risk-radar-export.timer`.
 
 ## 5. Apache reverse proxy
 
@@ -87,6 +92,7 @@ curl -I https://debt.l0g.fr/
 curl -sS https://debt.l0g.fr/latest.json | python3 -m json.tool | head
 curl -sS http://127.0.0.1:8502/_stcore/health
 sudo journalctl -u debt-risk-radar -n 100 --no-pager
+sudo journalctl -u debt-risk-radar-export -n 100 --no-pager
 ```
 
 Controle attendu :
@@ -111,11 +117,15 @@ sudo rsync -a --delete \
 sudo chown -R root:root /opt/debt-risk-radar
 sudo install -d -o debt-radar -g debt-radar -m 755 /var/www/debt-risk-radar
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar.service /etc/systemd/system/debt-risk-radar.service
+sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.service /etc/systemd/system/debt-risk-radar-export.service
+sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.timer /etc/systemd/system/debt-risk-radar-export.timer
 sudo systemctl daemon-reload
 sudo cp /opt/debt-risk-radar/deploy/apache-debt-risk-radar.conf /etc/apache2/sites-available/debt-risk-radar.conf
 sudo apache2ctl configtest
 sudo systemctl reload apache2
 sudo systemctl restart debt-risk-radar
+sudo systemctl enable --now debt-risk-radar-export.timer
+sudo systemctl start debt-risk-radar-export.service
 ```
 
 ## Notes securite
