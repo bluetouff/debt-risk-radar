@@ -56,10 +56,23 @@ def env_int(name: str, default: int, minimum: int | None = None) -> int:
 
 AUTO_REFRESH_SECONDS = env_int("DEBT_RISK_RADAR_AUTO_REFRESH_SECONDS", 15 * 60, minimum=60)
 AUTO_REFRESH_PARAM = "_drr_auto_refresh"
+VIEW_PARAM = "view"
 DEFAULT_COUNTRY = "USA"
 DEFAULT_EURO_GEO = "EA20"
 DEFAULT_FRED_START = "1990-01-01"
 DEFAULT_TREASURY_START = "2015-01-01"
+
+
+def query_value(name: str, default: str = "") -> str:
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return str(value[0]) if value else default
+    return str(value)
+
+
+def current_view() -> str:
+    view = query_value(VIEW_PARAM, "radar").lower()
+    return "faq" if view in {"faq", "help", "aide"} else "radar"
 
 
 def install_auto_refresh(seconds: int = AUTO_REFRESH_SECONDS) -> None:
@@ -198,6 +211,26 @@ st.markdown(
         background: var(--usd);
         box-shadow: 0 0 0 0 rgba(0,240,208,.55);
     }
+    .top-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-left: auto;
+        align-items: center;
+    }
+    .nav-link {
+        color: var(--dim) !important;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        text-decoration: none !important;
+    }
+    .nav-link:hover, .nav-link.active {
+        color: var(--bright) !important;
+        border-color: rgba(94, 234, 212, 0.65);
+        background: rgba(94, 234, 212, 0.06);
+    }
     .kpi-grid {
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -248,6 +281,27 @@ st.markdown(
         margin: 8px 0 14px;
     }
     .help-card strong { color: var(--paper); }
+    .faq-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin: 10px 0 18px;
+    }
+    .faq-card {
+        background: rgba(255, 255, 255, 0.018);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 15px;
+        min-height: 128px;
+        color: var(--dim);
+        font-size: 0.82rem;
+        line-height: 1.52;
+    }
+    .faq-card strong {
+        color: var(--paper);
+        display: block;
+        margin-bottom: 6px;
+    }
     .compact-wrap {
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -337,6 +391,7 @@ st.markdown(
     #MainMenu { visibility: hidden; }
     @media (max-width: 1180px) {
         .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .faq-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
         .kpi-grid { grid-template-columns: 1fr; }
@@ -439,23 +494,151 @@ def chart_layout(fig: go.Figure, title: str, height: int = 360, yaxis_title: str
     return fig
 
 
+def render_header(view: str) -> None:
+    radar_active = "active" if view == "radar" else ""
+    faq_active = "active" if view == "faq" else ""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    st.markdown(
+        f"""
+        <header class="tape">
+            <div class="brand"><b>Debt</b> Risk <b>Radar</b></div>
+            <div class="tagline">USA · zone euro EA20 · dette souveraine · credit gap · stress de marche</div>
+            <nav class="top-nav" aria-label="Navigation">
+                <a class="nav-link {radar_active}" href="?">Radar</a>
+                <a class="nav-link {faq_active}" href="?view=faq">Aide / FAQ</a>
+            </nav>
+            <div class="status-pill"><span class="status-dot"></span>{timestamp}</div>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_faq_page() -> None:
+    st.markdown("## Aide / FAQ")
+    st.markdown(
+        f"""
+        <div class="help-card">
+          <strong>Objectif.</strong> Debt Risk Radar est un tableau de bord de surveillance du risque de dette.
+          Il ne prédit pas une crise et ne produit pas de signal d'achat ou de vente : il indique quels canaux
+          méritent d'être lus en premier quand la dette, les taux, le crédit ou les spreads se tendent.
+        </div>
+        <div class="faq-grid">
+          <div class="faq-card"><strong>Périmètre</strong> Le radar agrège un socle américain fixe ({DEFAULT_COUNTRY}) pour Treasury, CBO, FRED, BIS et World Bank, puis ajoute la dette Maastricht Eurostat de la zone euro ({DEFAULT_EURO_GEO}).</div>
+          <div class="faq-card"><strong>Score 0-100</strong> 50 signale une zone élevée, 65 une surveillance active, 80 un stress. Le score est relatif aux séries disponibles et à leur régime récent.</div>
+          <div class="faq-card"><strong>Sources</strong> Les sources institutionnelles principales sont Treasury Fiscal Data, FRED, BIS, CBO, Eurostat et World Bank. Les signaux de marché passent par Massive Market Data quand la clé est disponible.</div>
+          <div class="faq-card"><strong>Lecture</strong> Le score global compte moins que sa composition : il faut regarder si le stress vient du fiscal, du crédit privé, des projections CBO, des spreads ou des prix de marché.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Que mesure exactement le radar ?", expanded=True):
+        st.markdown(
+            """
+            Le radar suit plusieurs familles de signaux qui peuvent se renforcer :
+            dette publique, charge d'intérêts, déficit, projections CBO, crédit privé,
+            conditions de marché, liquidité et comparables internationaux.
+
+            L'idée n'est pas de ramener toute la dette mondiale à un seul chiffre parfait,
+            mais de repérer rapidement le canal qui se détériore.
+            """
+        )
+
+    with st.expander("Pourquoi un périmètre fixe USA + zone euro ?"):
+        st.markdown(
+            f"""
+            Les contrôles publics rendaient la lecture ambiguë : l'utilisateur ne savait plus
+            si les chiffres affichés concernaient les États-Unis, l'Europe ou un pays sélectionné.
+
+            Le périmètre est donc fixé :
+            - `{DEFAULT_COUNTRY}` pour Treasury, CBO, FRED, BIS et World Bank.
+            - `{DEFAULT_EURO_GEO}` pour Eurostat Maastricht.
+            - Marché global pour les prix/spreads quand FRED ou Massive sont disponibles.
+            """
+        )
+
+    with st.expander("Comment est construit le score de risque ?"):
+        st.markdown(
+            """
+            Chaque série est transformée en signal comparable quand l'historique le permet :
+            niveau courant, écart à son régime récent, sens du risque, puis normalisation de 0 à 100.
+
+            Les familles sont ensuite agrégées avec des pondérations explicites. Si une source manque,
+            le score est recalculé sur les familles disponibles au lieu de bloquer tout le dashboard.
+            """
+        )
+
+    with st.expander("Comment lire la carte de risque ?"):
+        st.markdown(
+            """
+            Le graphique classe les grandes familles de risque. Le tableau sous le graphique détaille
+            les signaux individuels : famille, nom du signal, valeur, unité, source, date et score.
+
+            Une famille élevée n'est pas forcément une crise : c'est un pointeur. Il faut ouvrir les
+            sources et regarder si le signal vient d'une tendance lente ou d'un choc récent.
+            """
+        )
+
+    with st.expander("Pourquoi certains flux peuvent manquer ?"):
+        st.markdown(
+            """
+            Certaines sources sont gratuites et sans clé, comme Treasury, BIS, CBO, Eurostat ou World Bank.
+            D'autres nécessitent une clé serveur, comme FRED ou Massive Market Data.
+
+            Si une clé manque ou si une API échoue, le flux est signalé dans le bloc d'issues et exclu
+            du calcul. Les clés ne sont jamais affichées dans l'interface.
+            """
+        )
+
+    with st.expander("À quelle fréquence les données se rafraîchissent-elles ?"):
+        st.markdown(
+            f"""
+            L'app se rafraîchit automatiquement toutes les `{AUTO_REFRESH_SECONDS // 60}` minutes.
+            Les caches Streamlit évitent d'appeler inutilement les sources lentes.
+
+            Attention : beaucoup de séries publiques sont trimestrielles, annuelles ou publiées avec délai.
+            Le rafraîchissement de l'app ne transforme pas une série lente en donnée temps réel.
+            """
+        )
+
+    with st.expander("Quelles sont les limites importantes ?"):
+        st.markdown(
+            """
+            Le radar ne remplace pas une analyse pays, devise, maturité, détenteurs de dette,
+            liquidité de marché ou soutenabilité budgétaire complète.
+
+            Le score n'est pas comparable mécaniquement à d'autres dashboards l0g. Il sert à ordonner
+            la lecture du risque de dette dans cette app, pas à prédire une date de défaut, de downgrade
+            ou de crise.
+            """
+        )
+
+    with st.expander("Comment vérifier les sources utilisées ?"):
+        st.markdown(
+            """
+            La section `Audit sources` en bas du radar liste les fournisseurs effectivement utilisés,
+            le nombre de métriques chargées, la dernière date disponible et le risque maximum observé.
+
+            C'est le bon endroit pour vérifier rapidement si le score repose sur toutes les familles
+            attendues ou si une source optionnelle manque.
+            """
+        )
+
+
 country = DEFAULT_COUNTRY
 euro_geo = DEFAULT_EURO_GEO
 fred_start = DEFAULT_FRED_START
 treasury_start = DEFAULT_TREASURY_START
 
-install_auto_refresh()
+view = current_view()
+render_header(view)
 
-st.markdown(
-    f"""
-    <header class="tape">
-        <div class="brand"><b>Debt</b> Risk <b>Radar</b></div>
-        <div class="tagline">USA · zone euro EA20 · dette souveraine · credit gap · stress de marche</div>
-        <div class="status-pill"><span class="status-dot"></span>{datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
-    </header>
-    """,
-    unsafe_allow_html=True,
-)
+if view == "faq":
+    render_faq_page()
+    st.stop()
+
+install_auto_refresh()
 
 st.markdown(
     f"""
