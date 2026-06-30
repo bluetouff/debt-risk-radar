@@ -278,43 +278,6 @@ CBO_DATASETS = {
 }
 
 
-EUROSTAT_GEOS = {
-    "EA20": "Euro area 20",
-    "EU27_2020": "European Union 27",
-    "FR": "France",
-    "DE": "Germany",
-    "IT": "Italy",
-    "ES": "Spain",
-    "NL": "Netherlands",
-    "BE": "Belgium",
-    "PT": "Portugal",
-    "EL": "Greece",
-    "IE": "Ireland",
-}
-
-
-EUROSTAT_SERIES = {
-    "maastricht_debt": {
-        "name": "Maastricht gross government debt / GDP",
-        "url": "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/gov_10dd_edpt1",
-        "params": {"sector": "S13", "na_item": "GD", "unit": "PC_GDP", "freq": "A", "lang": "en"},
-        "unit": "% GDP",
-        "direction": "up",
-        "weight": 1.10,
-        "source": "Eurostat",
-    },
-    "government_balance": {
-        "name": "General government balance / GDP",
-        "url": "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/gov_10dd_edpt1",
-        "params": {"sector": "S13", "na_item": "B9", "unit": "PC_GDP", "freq": "A", "lang": "en"},
-        "unit": "% GDP",
-        "direction": "down",
-        "weight": 0.80,
-        "source": "Eurostat",
-    },
-}
-
-
 MASSIVE_MARKET_SERIES = {
     "TLT": {
         "name": "iShares 20+ Year Treasury Bond ETF",
@@ -368,7 +331,6 @@ BUCKET_LABELS = {
     "world_bank": "Global comparables",
     "global_credit": "BIS global credit",
     "cbo_projection": "CBO projections",
-    "euro_maastricht": "Eurostat Maastricht",
     "market_prices": "Massive market prices",
 }
 
@@ -378,11 +340,10 @@ BUCKET_WEIGHTS = {
     "rates_market": 0.18,
     "private_leverage": 0.12,
     "liquidity": 0.10,
-    "treasury_daily": 0.08,
+    "treasury_daily": 0.10,
     "world_bank": 0.04,
     "global_credit": 0.10,
-    "cbo_projection": 0.08,
-    "euro_maastricht": 0.04,
+    "cbo_projection": 0.10,
     "market_prices": 0.04,
 }
 

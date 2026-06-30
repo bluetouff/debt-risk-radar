@@ -24,10 +24,8 @@ from data import (
     build_debt_dynamics_projection,
     cbo_projection_metrics,
     combine_metrics,
-    eurostat_maastricht_metrics,
     fetch_bis_credit,
     fetch_cbo_projections,
-    fetch_eurostat_maastricht,
     fetch_fred_series,
     fetch_massive_market,
     fetch_treasury_debt,
@@ -58,7 +56,6 @@ AUTO_REFRESH_SECONDS = env_int("DEBT_RISK_RADAR_AUTO_REFRESH_SECONDS", 15 * 60, 
 AUTO_REFRESH_PARAM = "_drr_auto_refresh"
 VIEW_PARAM = "view"
 DEFAULT_COUNTRY = "USA"
-DEFAULT_EURO_GEO = "EA20"
 DEFAULT_FRED_START = "1990-01-01"
 DEFAULT_TREASURY_START = "2015-01-01"
 
@@ -529,7 +526,7 @@ def render_header(view: str) -> None:
         f"""
         <header class="tape">
             <div class="brand"><b>Debt</b> Risk <b>Radar</b></div>
-            <div class="tagline">USA · zone euro EA20 · dette souveraine · credit gap · stress de marche</div>
+            <div class="tagline">USA · dette souveraine · credit gap · stress de marche</div>
             <nav class="top-nav" aria-label="Navigation">
                 <a class="nav-link {radar_active}" href="?">Radar</a>
                 <a class="nav-link {faq_active}" href="?view=faq">Aide / FAQ</a>
@@ -565,9 +562,9 @@ def render_faq_page() -> None:
           méritent d'être lus en premier quand la dette, les taux, le crédit ou les spreads se tendent.
         </div>
         <div class="faq-grid">
-          <div class="faq-card"><strong>Périmètre</strong> Le radar agrège un socle américain fixe ({DEFAULT_COUNTRY}) pour Treasury, CBO, FRED, BIS et World Bank, puis ajoute la dette Maastricht Eurostat de la zone euro ({DEFAULT_EURO_GEO}).</div>
+          <div class="faq-card"><strong>Périmètre</strong> Le radar est centré sur la dette US : Treasury, CBO, FRED, BIS et World Bank sont lus sur un socle américain fixe ({DEFAULT_COUNTRY}).</div>
           <div class="faq-card"><strong>Score 0-100</strong> 50 signale une zone élevée, 65 une surveillance active, 80 un stress. Le score est relatif aux séries disponibles et à leur régime récent.</div>
-          <div class="faq-card"><strong>Sources</strong> Les sources institutionnelles principales sont Treasury Fiscal Data, FRED, BIS, CBO, Eurostat et World Bank. Les signaux de marché passent par Massive Market Data quand la clé est disponible.</div>
+          <div class="faq-card"><strong>Sources</strong> Les sources institutionnelles principales sont Treasury Fiscal Data, FRED, BIS, CBO et World Bank. Les signaux de marché passent par Massive Market Data quand la clé est disponible.</div>
           <div class="faq-card"><strong>Lecture</strong> Le score global compte moins que sa composition : il faut regarder si le stress vient du fiscal, du crédit privé, des projections CBO, des spreads ou des prix de marché.</div>
         </div>
         """,
@@ -586,16 +583,15 @@ def render_faq_page() -> None:
             """
         )
 
-    with st.expander("Pourquoi un périmètre fixe USA + zone euro ?"):
+    with st.expander("Quel est le périmètre géographique ?"):
         st.markdown(
             f"""
-            Les contrôles publics rendaient la lecture ambiguë : l'utilisateur ne savait plus
-            si les chiffres affichés concernaient les États-Unis, l'Europe ou un pays sélectionné.
-
-            Le périmètre est donc fixé :
+            Le dashboard est volontairement centré sur la dette US. Le périmètre est fixé :
             - `{DEFAULT_COUNTRY}` pour Treasury, CBO, FRED, BIS et World Bank.
-            - `{DEFAULT_EURO_GEO}` pour Eurostat Maastricht.
-            - Marché global pour les prix/spreads quand FRED ou Massive sont disponibles.
+            - Marché global pour les prix, taux et spreads quand FRED ou Massive sont disponibles.
+
+            Les métriques de marché servent de proxies de transmission : elles indiquent si les taux,
+            les ETF obligataires ou les spreads crédit commencent à refléter une prime de risque.
             """
         )
 
@@ -624,7 +620,7 @@ def render_faq_page() -> None:
     with st.expander("Pourquoi certains flux peuvent manquer ?"):
         st.markdown(
             """
-            Certaines sources sont gratuites et sans clé, comme Treasury, BIS, CBO, Eurostat ou World Bank.
+            Certaines sources sont gratuites et sans clé, comme Treasury, BIS, CBO ou World Bank.
             D'autres nécessitent une clé serveur, comme FRED ou Massive Market Data.
 
             Si une clé manque ou si une API échoue, le flux est signalé dans le bloc d'issues et exclu
@@ -668,7 +664,6 @@ def render_faq_page() -> None:
 
 
 country = DEFAULT_COUNTRY
-euro_geo = DEFAULT_EURO_GEO
 fred_start = DEFAULT_FRED_START
 treasury_start = DEFAULT_TREASURY_START
 
@@ -686,9 +681,9 @@ st.markdown(
     f"""
     <div class="help-card">
       <strong>Perimetre fixe.</strong> Le radar agrège les signaux américains pour la dette fédérale,
-      les projections CBO, FRED, BIS et World Bank ({country}), puis ajoute la dette Maastricht Eurostat
-      pour la zone euro ({euro_geo}). Les prix et spreads de marche sont globaux quand Massive/FRED sont
-      disponibles. Auto-refresh toutes les {AUTO_REFRESH_SECONDS // 60} min.
+      les projections CBO, FRED, BIS et World Bank ({country}). Les prix, taux et spreads de marche sont
+      utilisés comme proxies de transmission quand Massive/FRED sont disponibles. Auto-refresh toutes les
+      {AUTO_REFRESH_SECONDS // 60} min.
     </div>
     """,
     unsafe_allow_html=True,
@@ -696,22 +691,20 @@ st.markdown(
 
 issues = []
 
-with st.spinner("Loading Treasury, FRED, BIS, CBO, Eurostat, World Bank and Massive data..."):
+with st.spinner("Loading Treasury, FRED, BIS, CBO, World Bank and Massive data..."):
     treasury_df, treasury_issues = fetch_treasury_debt(str(treasury_start))
     fred_data, fred_issues = fetch_fred_series(str(fred_start))
     wb_df, wb_issues = fetch_world_bank(country)
     bis_df, bis_issues = fetch_bis_credit(country)
     cbo_df, cbo_issues = fetch_cbo_projections()
-    euro_df, euro_issues = fetch_eurostat_maastricht(euro_geo)
     massive_data, massive_issues = fetch_massive_market()
-    issues.extend(treasury_issues + fred_issues + wb_issues + bis_issues + cbo_issues + euro_issues + massive_issues)
+    issues.extend(treasury_issues + fred_issues + wb_issues + bis_issues + cbo_issues + massive_issues)
 
 treasury_metrics_df = treasury_daily_metrics(treasury_df)
 fred_metrics_df = fred_metrics(fred_data)
 wb_metrics_df = world_bank_metrics(wb_df)
 bis_metrics_df = bis_credit_metrics(bis_df)
 cbo_metrics_df = cbo_projection_metrics(cbo_df)
-euro_metrics_df = eurostat_maastricht_metrics(euro_df)
 massive_metrics_df = massive_market_metrics(massive_data)
 metrics = combine_metrics(
     treasury_metrics_df,
@@ -719,7 +712,6 @@ metrics = combine_metrics(
     wb_metrics_df,
     bis_metrics_df,
     cbo_metrics_df,
-    euro_metrics_df,
     massive_metrics_df,
 )
 buckets = bucket_scores(metrics)
@@ -914,8 +906,8 @@ st.markdown("## Projections institutionnelles")
 st.markdown(
     """
     <div class="help-card">
-      <strong>Pourquoi CBO, BIS et Eurostat ensemble ?</strong> CBO donne la trajectoire budgetaire americaine,
-      BIS mesure l'ecart du credit prive a sa tendance, Eurostat ancre la comparaison Maastricht europeenne.
+      <strong>Pourquoi CBO et BIS ensemble ?</strong> CBO donne la trajectoire budgetaire americaine,
+      BIS mesure l'ecart du credit prive a sa tendance.
       Le risque devient plus serieux quand plusieurs familles se tendent en meme temps.
     </div>
     """,
@@ -951,23 +943,11 @@ with inst_right:
                 go.Scatter(x=gap["date"], y=gap["value"], name=f"BIS credit gap {country}", line=dict(color="#5eead4"))
             )
             plotted_inst = True
-    if not euro_df.empty:
-        debt = euro_df[euro_df["series_id"] == "maastricht_debt"].sort_values("date")
-        if not debt.empty:
-            fig_inst.add_trace(
-                go.Scatter(
-                    x=debt["date"],
-                    y=debt["value"],
-                    name=f"Eurostat Maastricht debt {euro_geo}",
-                    line=dict(color="#f5b13d"),
-                )
-            )
-            plotted_inst = True
-    chart_layout(fig_inst, "BIS credit gap and Eurostat Maastricht debt", yaxis_title="pp / % GDP")
+    chart_layout(fig_inst, "BIS credit gap", yaxis_title="pp")
     if plotted_inst:
         st.plotly_chart(fig_inst, width="stretch")
     else:
-        st.info("BIS and Eurostat feeds unavailable.")
+        st.info("BIS feed unavailable.")
 
 st.markdown("## Scenario dette / PIB")
 st.markdown(
@@ -1031,7 +1011,7 @@ st.markdown(
     """
     <div class="help-card">
       <strong>Lecture des sources.</strong> Les donnees institutionnelles viennent de Treasury Fiscal Data,
-      BIS, CBO, Eurostat, World Bank et FRED. Les prix et ratios de marche passent par Massive quand la cle
+      BIS, CBO, World Bank et FRED. Les prix et ratios de marche passent par Massive quand la cle
       est presente. Les flux absents sont signales plus haut et exclus du score sans bloquer le reste du radar.
     </div>
     """,

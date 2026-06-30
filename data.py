@@ -23,7 +23,6 @@ from catalog import (
     BIS_COUNTRY_MAP,
     BUCKET_WEIGHTS,
     CBO_DATASETS,
-    EUROSTAT_SERIES,
     FRED_SERIES,
     MASSIVE_MARKET_SERIES,
     TREASURY_ENDPOINTS,
@@ -276,46 +275,6 @@ def fetch_cbo_projections() -> Tuple[pd.DataFrame, List[DataIssue]]:
         return df.dropna(subset=["value"]), []
     except Exception as exc:
         return pd.DataFrame(), [DataIssue(dataset["source"], _safe_error(exc))]
-
-
-def _eurostat_jsonstat_to_frame(payload: dict, series_id: str, meta: dict, geo: str) -> pd.DataFrame:
-    time_dim = payload.get("dimension", {}).get("time", {}).get("category", {})
-    index_map = time_dim.get("index", {})
-    labels = {int(idx): label for label, idx in index_map.items()}
-    values = payload.get("value", {})
-    rows = []
-    for idx_str, value in values.items():
-        idx = int(idx_str)
-        year = labels.get(idx)
-        if year is None:
-            continue
-        rows.append(
-            {
-                "series_id": series_id,
-                "name": meta["name"],
-                "geo": geo,
-                "date": pd.Timestamp(year=int(year), month=12, day=31),
-                "value": float(value),
-                "unit": meta["unit"],
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-@st.cache_data(ttl=24 * 3600, show_spinner=False)
-def fetch_eurostat_maastricht(geo: str = "EA20") -> Tuple[pd.DataFrame, List[DataIssue]]:
-    frames = []
-    issues: List[DataIssue] = []
-    for series_id, meta in EUROSTAT_SERIES.items():
-        params = dict(meta["params"], geo=geo)
-        try:
-            response = requests.get(meta["url"], params=params, timeout=30)
-            if response.status_code != 200:
-                raise DataUnavailable(f"HTTP {response.status_code}: {response.text[:200]}")
-            frames.append(_eurostat_jsonstat_to_frame(response.json(), series_id, meta, geo))
-        except Exception as exc:
-            issues.append(DataIssue("Eurostat", f"{series_id}: {_safe_error(exc)}"))
-    return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()), issues
 
 
 def _massive_session() -> requests.Session:
@@ -588,39 +547,6 @@ def cbo_projection_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "weight": meta["weight"],
                 "source": "CBO Open Data",
                 "rationale": "Latest CBO long-term projection vintage; terminal projected value.",
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def eurostat_maastricht_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame()
-
-    rows = []
-    for series_id, meta in EUROSTAT_SERIES.items():
-        sub = df[df["series_id"] == series_id].sort_values("date")
-        if sub.empty:
-            continue
-        series = pd.Series(sub["value"].values, index=sub["date"])
-        scored = zscore_latest(series, meta["direction"], window_years=10)
-        current = float(series.iloc[-1])
-        risk_score = risk_points_from_z(scored["signed_z"])
-        if series_id == "maastricht_debt":
-            risk_score = max(risk_score, risk_points_from_level(current, neutral=60.0, stress=120.0, direction="up"))
-        rows.append(
-            {
-                "bucket": "euro_maastricht",
-                "series_id": series_id,
-                "name": meta["name"],
-                "unit": meta["unit"],
-                "date": series.index[-1],
-                "current": current,
-                "signed_z": scored["signed_z"],
-                "risk_score": risk_score,
-                "weight": meta["weight"],
-                "source": "Eurostat",
-                "rationale": "Eurostat EDP Maastricht debt and general government balance.",
             }
         )
     return pd.DataFrame(rows)

@@ -2,7 +2,7 @@
 
 Dashboard Streamlit de monitoring du risque lie a la dette souveraine, aux taux, au credit prive et a la liquidite.
 
-La V1 est centree sur les Etats-Unis, parce que les sources ouvertes y sont les plus riches et les plus rapides a exploiter. La V2 ajoute BIS, CBO, Eurostat et Massive Market Data.
+L'app est centree sur les Etats-Unis, parce que les sources ouvertes y sont les plus riches et les plus rapides a exploiter. La V2 ajoute BIS, CBO et Massive Market Data.
 
 ## Ce que surveille l'app
 
@@ -13,7 +13,6 @@ La V1 est centree sur les Etats-Unis, parce que les sources ouvertes y sont les 
 - Indicateurs annuels comparables via World Bank.
 - Credit-to-GDP gap et debt service ratios via BIS.
 - Projections CBO long terme : dette detenue par le public, dette brute, deficit, interets.
-- Dette Maastricht et solde public via Eurostat.
 - Prix et ratios de marche via Massive Market Data.
 - Scenario `r-g` pour tester la trajectoire dette / PIB.
 
@@ -29,7 +28,7 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Treasury Fiscal Data, BIS, CBO, Eurostat et World Bank fonctionnent sans cle API.
+Treasury Fiscal Data, BIS, CBO et World Bank fonctionnent sans cle API.
 
 FRED est optionnel mais fortement recommande :
 
@@ -92,11 +91,10 @@ Les buckets sont ensuite agreges avec des poids :
 - Rates and market stress : 18 %
 - Private leverage : 12 %
 - Liquidity plumbing : 10 %
-- Treasury daily debt : 8 %
+- Treasury daily debt : 10 %
 - Global comparables : 4 %
 - BIS global credit : 10 %
-- CBO projections : 8 %
-- Eurostat Maastricht : 4 %
+- CBO projections : 10 %
 - Massive market prices : 4 %
 
 Seuils d'affichage :
@@ -112,14 +110,12 @@ Seuils d'affichage :
 - World Bank Indicators API
 - BIS Data Portal bulk downloads : `WS_CREDIT_GAP`, `WS_DSR`
 - CBO Open Data GitHub : `long_term_budget`
-- Eurostat dissemination API : `gov_10dd_edpt1`
 - Massive Market Data : daily aggregates, Polygon-shaped REST
 
 ## Roadmap
 
 - Ajouter BIS total credit (`WS_TC`) en complement du credit gap.
 - Ajouter CBO ten-year budget pour rapprocher projections 10 ans et long terme.
-- Ajouter Eurostat interets et recettes publiques quand les series sont stabilisees dans le catalogue.
 - Ajouter SEC EDGAR pour dette corporate, maturites et interest expense.
 - Ajouter davantage de tickers Massive : MOVE proxy, ETFs inflation-linked, banques, regional banks, CDS proxy si disponible.
 - Ajouter alertes email ou webhook sur franchissement de seuils.
