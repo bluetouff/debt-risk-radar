@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from catalog import BUCKET_LABELS, EUROSTAT_GEOS, WATCH_LEVEL, STRESS_LEVEL
+from catalog import BUCKET_LABELS, WATCH_LEVEL, STRESS_LEVEL
 from data import (
     bis_credit_metrics,
     bucket_scores,
@@ -56,6 +56,10 @@ def env_int(name: str, default: int, minimum: int | None = None) -> int:
 
 AUTO_REFRESH_SECONDS = env_int("DEBT_RISK_RADAR_AUTO_REFRESH_SECONDS", 15 * 60, minimum=60)
 AUTO_REFRESH_PARAM = "_drr_auto_refresh"
+DEFAULT_COUNTRY = "USA"
+DEFAULT_EURO_GEO = "EA20"
+DEFAULT_FRED_START = "1990-01-01"
+DEFAULT_TREASURY_START = "2015-01-01"
 
 
 def install_auto_refresh(seconds: int = AUTO_REFRESH_SECONDS) -> None:
@@ -82,7 +86,7 @@ st.set_page_config(
     page_title="Debt Risk Radar",
     page_icon=":bar_chart:",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -231,11 +235,6 @@ st.markdown(
         font-size: 0.76rem;
         margin-top: 8px;
         line-height: 1.35;
-    }
-    .source-note {
-        color: var(--dim);
-        font-size: 0.82rem;
-        line-height: 1.45;
     }
     .help-card {
         background: rgba(255, 255, 255, 0.018);
@@ -440,36 +439,10 @@ def chart_layout(fig: go.Figure, title: str, height: int = 360, yaxis_title: str
     return fig
 
 
-with st.sidebar:
-    st.header("Controls")
-    country = st.selectbox(
-        "World Bank / BIS country",
-        ["USA", "FRA", "DEU", "JPN", "GBR", "ITA", "ESP", "CHN", "BRA", "IND"],
-        index=0,
-    )
-    euro_geo = st.selectbox(
-        "Eurostat geo",
-        list(EUROSTAT_GEOS.keys()),
-        format_func=lambda geo: f"{geo} - {EUROSTAT_GEOS[geo]}",
-        index=0,
-    )
-    fred_start = st.date_input("FRED start date", value=pd.Timestamp("1990-01-01"))
-    treasury_start = st.date_input("Treasury daily start", value=pd.Timestamp("2015-01-01"))
-    st.caption(f"Auto-refresh toutes les {AUTO_REFRESH_SECONDS // 60} min.")
-
-    st.divider()
-    st.caption("Data policy")
-    st.markdown(
-        """
-        <div class="source-note">
-        Treasury, BIS, CBO, Eurostat and World Bank run without API keys.
-        FRED requires FRED_API_KEY. Massive Market Data requires MASSIVE_API_KEY
-        and sends the key in the Authorization header.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+country = DEFAULT_COUNTRY
+euro_geo = DEFAULT_EURO_GEO
+fred_start = DEFAULT_FRED_START
+treasury_start = DEFAULT_TREASURY_START
 
 install_auto_refresh()
 
@@ -477,9 +450,21 @@ st.markdown(
     f"""
     <header class="tape">
         <div class="brand"><b>Debt</b> Risk <b>Radar</b></div>
-        <div class="tagline">dette souveraine · credit gap · interets · liquidite · stress de marche</div>
+        <div class="tagline">USA · zone euro EA20 · dette souveraine · credit gap · stress de marche</div>
         <div class="status-pill"><span class="status-dot"></span>{datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
     </header>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    f"""
+    <div class="help-card">
+      <strong>Perimetre fixe.</strong> Le radar agrège les signaux américains pour la dette fédérale,
+      les projections CBO, FRED, BIS et World Bank ({country}), puis ajoute la dette Maastricht Eurostat
+      pour la zone euro ({euro_geo}). Les prix et spreads de marche sont globaux quand Massive/FRED sont
+      disponibles. Auto-refresh toutes les {AUTO_REFRESH_SECONDS // 60} min.
+    </div>
     """,
     unsafe_allow_html=True,
 )
