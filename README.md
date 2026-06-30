@@ -57,6 +57,22 @@ L'app demarre sur `http://localhost:8501`.
 
 En local comme en prod, la configuration Streamlit fournie force l'ecoute sur `127.0.0.1`, desactive la telemetrie et masque les details d'erreur cote client.
 
+## Export machine-readable
+
+En production, le dashboard ecrit un snapshot public dans :
+
+```text
+/var/www/debt-risk-radar/latest.json
+```
+
+Apache sert ce fichier sur :
+
+```text
+https://debt.l0g.fr/latest.json
+```
+
+Le JSON expose le score global, les scores par famille, les principaux signaux, les sources chargees, les seuils et les flux manquants. Il ne contient jamais de cle API.
+
 ## Structure
 
 ```text
@@ -129,6 +145,7 @@ Principes non negociables :
 
 - Streamlit ecoute uniquement sur `127.0.0.1`.
 - Apache expose HTTPS et les websockets `_stcore`.
+- Apache sert `/latest.json` comme fichier statique public, hors proxy Streamlit.
 - Les secrets restent dans `/etc/debt-risk-radar.env`, jamais dans le repo.
 - Le hook Git local pointe vers `.githooks` pour bloquer les secrets avant commit.
 - Le service tourne avec l'utilisateur systeme `debt-radar`, pas root.

@@ -7,6 +7,7 @@ Objectif : exposer Streamlit uniquement via Apache en HTTPS, sans jamais publier
 ```bash
 sudo adduser --system --group --home /var/lib/debt-risk-radar debt-radar
 sudo install -d -o debt-radar -g debt-radar -m 700 /var/lib/debt-risk-radar
+sudo install -d -o debt-radar -g debt-radar -m 755 /var/www/debt-risk-radar
 sudo install -d -o debt-radar -g debt-radar -m 755 /opt/debt-risk-radar
 ```
 
@@ -48,6 +49,8 @@ sudo systemctl status debt-risk-radar
 
 Le service ecoute uniquement sur `127.0.0.1:8502`.
 
+Le fichier machine-readable public est ecrit dans `/var/www/debt-risk-radar/latest.json`.
+
 ## 5. Apache reverse proxy
 
 Modules requis :
@@ -61,6 +64,9 @@ sudo systemctl reload apache2
 ```
 
 Adapte `ServerName` et les chemins Let's Encrypt dans le fichier Apache.
+
+Le vhost exclut `/latest.json` du reverse proxy Streamlit et le sert directement depuis
+`/var/www/debt-risk-radar/latest.json`.
 
 ## 6. Pare-feu
 
@@ -78,6 +84,7 @@ Le port `8502` ne doit jamais etre ouvert publiquement.
 
 ```bash
 curl -I https://debt.l0g.fr/
+curl -sS https://debt.l0g.fr/latest.json | python3 -m json.tool | head
 curl -sS http://127.0.0.1:8502/_stcore/health
 sudo journalctl -u debt-risk-radar -n 100 --no-pager
 ```
@@ -88,6 +95,7 @@ Controle attendu :
 - `X-Frame-Options: DENY`.
 - `X-Content-Type-Options: nosniff`.
 - `Referrer-Policy: no-referrer`.
+- `/latest.json` repond en JSON valide, sans cle API.
 - aucune cle API dans les logs.
 - service lance sous `debt-radar`, pas root.
 
@@ -101,6 +109,12 @@ sudo rsync -a --delete \
   --exclude __pycache__ \
   "$DEBT_RISK_RADAR_SRC"/ /opt/debt-risk-radar/
 sudo chown -R root:root /opt/debt-risk-radar
+sudo install -d -o debt-radar -g debt-radar -m 755 /var/www/debt-risk-radar
+sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar.service /etc/systemd/system/debt-risk-radar.service
+sudo systemctl daemon-reload
+sudo cp /opt/debt-risk-radar/deploy/apache-debt-risk-radar.conf /etc/apache2/sites-available/debt-risk-radar.conf
+sudo apache2ctl configtest
+sudo systemctl reload apache2
 sudo systemctl restart debt-risk-radar
 ```
 
@@ -109,4 +123,4 @@ sudo systemctl restart debt-risk-radar
 - Streamlit reste une app serveur : garde-la derriere Apache, jamais exposee directement.
 - Garde `showErrorDetails=false` en production.
 - La CSP est volontairement compatible Streamlit. Tu peux la durcir apres test navigateur complet, mais ne casse pas les websockets `_stcore`.
-- Le systemd fourni bloque l'ecriture partout sauf `/var/lib/debt-risk-radar`.
+- Le systemd fourni bloque l'ecriture partout sauf `/var/lib/debt-risk-radar` et `/var/www/debt-risk-radar`.
