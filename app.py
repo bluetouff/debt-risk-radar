@@ -795,82 +795,78 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-chart_left, chart_right = st.columns(2)
+if not treasury_df.empty:
+    daily = treasury_df.set_index("record_date").sort_index()
+    fig_debt = go.Figure()
+    fig_debt.add_trace(
+        go.Scatter(
+            x=daily.index,
+            y=daily["tot_pub_debt_out_amt"] / 1_000_000_000_000,
+            name="Total public debt",
+            line=dict(color="#5eead4", width=2),
+        )
+    )
+    fig_debt.add_trace(
+        go.Scatter(
+            x=daily.index,
+            y=daily["debt_held_public_amt"] / 1_000_000_000_000,
+            name="Held by public",
+            line=dict(color="#f5b13d", width=2),
+        )
+    )
+    chart_layout(fig_debt, "Dette US Treasury, trillions USD", height=430)
+    st.plotly_chart(fig_debt, width="stretch")
+else:
+    st.info("Treasury daily debt feed unavailable.")
 
-with chart_left:
-    if not treasury_df.empty:
-        daily = treasury_df.set_index("record_date").sort_index()
-        fig_debt = go.Figure()
-        fig_debt.add_trace(
-            go.Scatter(
-                x=daily.index,
-                y=daily["tot_pub_debt_out_amt"] / 1_000_000_000_000,
-                name="Total public debt",
-                line=dict(color="#5eead4", width=2),
-            )
-        )
-        fig_debt.add_trace(
-            go.Scatter(
-                x=daily.index,
-                y=daily["debt_held_public_amt"] / 1_000_000_000_000,
-                name="Held by public",
-                line=dict(color="#f5b13d", width=2),
-            )
-        )
-        chart_layout(fig_debt, "Dette US Treasury, trillions USD")
-        st.plotly_chart(fig_debt, width="stretch")
-    else:
-        st.info("Treasury daily debt feed unavailable.")
-
-with chart_right:
-    fig_market = make_subplots(specs=[[{"secondary_y": True}]])
-    plotted = False
-    if "HYG" in massive_data:
-        fig_market.add_trace(
-            go.Scatter(
-                x=massive_data["HYG"].index,
-                y=massive_data["HYG"],
-                name="HYG close",
-                line=dict(color="#ff4d87"),
-            ),
-            secondary_y=False,
-        )
-        plotted = True
-    if "TLT" in massive_data:
-        fig_market.add_trace(
-            go.Scatter(
-                x=massive_data["TLT"].index,
-                y=massive_data["TLT"],
-                name="TLT close",
-                line=dict(color="#5eead4"),
-            ),
-            secondary_y=False,
-        )
-        plotted = True
-    if "DGS10" in fred_data:
-        fig_market.add_trace(
-            go.Scatter(x=fred_data["DGS10"].index, y=fred_data["DGS10"], name="10Y yield", line=dict(color="#f5b13d")),
-            secondary_y=True,
-        )
-        plotted = True
-    if "BAMLH0A0HYM2" in fred_data:
-        fig_market.add_trace(
-            go.Scatter(
-                x=fred_data["BAMLH0A0HYM2"].index,
-                y=fred_data["BAMLH0A0HYM2"],
-                name="HY OAS",
-                line=dict(color="#ff4d87"),
-            ),
-            secondary_y=True,
-        )
-        plotted = True
-    chart_layout(fig_market, "Taux, credit et prix de marche")
-    fig_market.update_yaxes(title_text="ETF price", secondary_y=False)
-    fig_market.update_yaxes(title_text="Yield / spread", secondary_y=True)
-    if plotted:
-        st.plotly_chart(fig_market, width="stretch")
-    else:
-        st.info("Add FRED_API_KEY and/or MASSIVE_API_KEY to unlock market charts.")
+fig_market = make_subplots(specs=[[{"secondary_y": True}]])
+plotted = False
+if "HYG" in massive_data:
+    fig_market.add_trace(
+        go.Scatter(
+            x=massive_data["HYG"].index,
+            y=massive_data["HYG"],
+            name="HYG close",
+            line=dict(color="#ff4d87"),
+        ),
+        secondary_y=False,
+    )
+    plotted = True
+if "TLT" in massive_data:
+    fig_market.add_trace(
+        go.Scatter(
+            x=massive_data["TLT"].index,
+            y=massive_data["TLT"],
+            name="TLT close",
+            line=dict(color="#5eead4"),
+        ),
+        secondary_y=False,
+    )
+    plotted = True
+if "DGS10" in fred_data:
+    fig_market.add_trace(
+        go.Scatter(x=fred_data["DGS10"].index, y=fred_data["DGS10"], name="10Y yield", line=dict(color="#f5b13d")),
+        secondary_y=True,
+    )
+    plotted = True
+if "BAMLH0A0HYM2" in fred_data:
+    fig_market.add_trace(
+        go.Scatter(
+            x=fred_data["BAMLH0A0HYM2"].index,
+            y=fred_data["BAMLH0A0HYM2"],
+            name="HY OAS",
+            line=dict(color="#ff4d87"),
+        ),
+        secondary_y=True,
+    )
+    plotted = True
+chart_layout(fig_market, "Taux, credit et prix de marche", height=460)
+fig_market.update_yaxes(title_text="ETF price", secondary_y=False)
+fig_market.update_yaxes(title_text="Yield / spread", secondary_y=True)
+if plotted:
+    st.plotly_chart(fig_market, width="stretch")
+else:
+    st.info("Add FRED_API_KEY and/or MASSIVE_API_KEY to unlock market charts.")
 
 st.markdown("## Projections institutionnelles")
 st.markdown(
