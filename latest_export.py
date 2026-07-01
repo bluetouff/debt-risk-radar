@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from catalog import BUCKET_LABELS, STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS
+from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS
 
 if Path(sys.argv[0]).name == "latest_export.py":
     os.environ.setdefault("DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE", "1")
@@ -39,6 +39,7 @@ from data import (
     massive_market_metrics,
     current_stress_score,
     score_label,
+    score_coverage,
     treasury_daily_metrics,
     world_bank_metrics,
 )
@@ -129,6 +130,7 @@ def load_metric_snapshot(
 def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue]) -> dict:
     generated_at = datetime.now(timezone.utc).replace(microsecond=0)
     overall = current_stress_score(buckets)
+    current_coverage = score_coverage(buckets, expected_buckets=CURRENT_STRESS_BUCKETS)
     structural_buckets = buckets[buckets["bucket"].isin(STRUCTURAL_BUCKETS)] if not buckets.empty else pd.DataFrame()
     source_rows = []
     if not metrics.empty:
@@ -213,6 +215,8 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
             "current_stress": json_value(float(overall)) if pd.notna(overall) else None,
             "status": score_label(overall),
             "methodology": "Current stress score excludes structural long-term CBO projections.",
+            "coverage": json_value(current_coverage),
+            "coverage_note": "Missing current-stress buckets are imputed at neutral 50 before weighting.",
             "excluded_buckets": sorted(STRUCTURAL_BUCKETS),
             "buckets": bucket_rows,
             "structural": structural_rows,

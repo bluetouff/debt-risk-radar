@@ -23,8 +23,10 @@ from catalog import (
     BIS_COUNTRY_MAP,
     BUCKET_WEIGHTS,
     CBO_DATASETS,
+    CURRENT_STRESS_BUCKETS,
     FRED_SERIES,
     MASSIVE_MARKET_SERIES,
+    NEUTRAL_RISK_SCORE,
     TREASURY_ENDPOINTS,
     WORLD_BANK_INDICATORS,
     ZSCORE_WINDOW_YEARS,
@@ -667,19 +669,71 @@ def bucket_scores(metrics: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("score", ascending=False)
 
 
-def overall_score(bucket_df: pd.DataFrame, exclude_buckets: set[str] | None = None) -> float:
+def score_coverage(
+    bucket_df: pd.DataFrame,
+    expected_buckets: Iterable[str] | None = None,
+    exclude_buckets: set[str] | None = None,
+) -> float:
     if bucket_df.empty:
-        return np.nan
+        return 0.0
     scoped = bucket_df
     if exclude_buckets:
         scoped = scoped[~scoped["bucket"].isin(exclude_buckets)]
+    if expected_buckets is not None:
+        expected = list(expected_buckets)
+        denominator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) for bucket in expected)
+        if denominator <= 0:
+            return 0.0
+        present = set(scoped["bucket"])
+        numerator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) for bucket in expected if bucket in present)
+        return float(np.clip(numerator / denominator, 0, 1))
+    denominator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) for bucket in BUCKET_WEIGHTS)
+    if denominator <= 0:
+        return 0.0
+    return float(np.clip(scoped["weight"].sum() / denominator, 0, 1))
+
+
+def overall_score(
+    bucket_df: pd.DataFrame,
+    exclude_buckets: set[str] | None = None,
+    expected_buckets: Iterable[str] | None = None,
+    neutral_missing: bool = False,
+) -> float:
+    if bucket_df.empty and not expected_buckets:
+        return np.nan
+    scoped = bucket_df.copy()
+    if exclude_buckets and not scoped.empty:
+        scoped = scoped[~scoped["bucket"].isin(exclude_buckets)]
+    if expected_buckets is not None:
+        expected = list(expected_buckets)
+        if not scoped.empty:
+            scoped = scoped[scoped["bucket"].isin(expected)]
+        if neutral_missing:
+            present = set(scoped["bucket"]) if not scoped.empty else set()
+            missing_rows = [
+                {
+                    "bucket": bucket,
+                    "score": NEUTRAL_RISK_SCORE,
+                    "weight": BUCKET_WEIGHTS.get(bucket, 0.0),
+                    "n": 0,
+                }
+                for bucket in expected
+                if bucket not in present
+            ]
+            if missing_rows:
+                scoped = pd.concat([scoped, pd.DataFrame(missing_rows)], ignore_index=True)
     if scoped.empty:
         return np.nan
     return float(np.average(scoped["score"], weights=scoped["weight"]))
 
 
 def current_stress_score(bucket_df: pd.DataFrame) -> float:
-    return overall_score(bucket_df, exclude_buckets=STRUCTURAL_BUCKETS)
+    return overall_score(
+        bucket_df,
+        exclude_buckets=STRUCTURAL_BUCKETS,
+        expected_buckets=CURRENT_STRESS_BUCKETS,
+        neutral_missing=True,
+    )
 
 
 def score_label(score: float) -> str:
