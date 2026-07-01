@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from catalog import BUCKET_LABELS, WATCH_LEVEL, STRESS_LEVEL
+from catalog import BUCKET_LABELS, WATCH_LEVEL, STRESS_LEVEL, STRUCTURAL_BUCKETS
 from data import (
     bis_credit_metrics,
     bucket_scores,
@@ -34,7 +34,7 @@ from data import (
     fred_metrics,
     massive_key_available,
     massive_market_metrics,
-    overall_score,
+    current_stress_score,
     score_color,
     score_label,
     treasury_daily_metrics,
@@ -564,9 +564,9 @@ def render_faq_page() -> None:
         </div>
         <div class="faq-grid">
           <div class="faq-card"><strong>Périmètre</strong> Le radar est centré sur la dette US : Treasury, CBO, FRED, BIS et World Bank sont lus sur un socle américain fixe ({DEFAULT_COUNTRY}).</div>
-          <div class="faq-card"><strong>Score 0-100</strong> 50 signale une zone élevée, 65 une surveillance active, 80 un stress. Le score est relatif aux séries disponibles et à leur régime récent.</div>
+          <div class="faq-card"><strong>Score courant 0-100</strong> 50 signale une zone élevée, 65 une surveillance active, 80 un stress. Ce score exclut les projections CBO long terme.</div>
           <div class="faq-card"><strong>Sources</strong> Les sources institutionnelles principales sont Treasury Fiscal Data, FRED, BIS, CBO et World Bank. Les signaux de marché passent par Massive Market Data quand la clé est disponible.</div>
-          <div class="faq-card"><strong>Lecture</strong> Le score global compte moins que sa composition : il faut regarder si le stress vient du fiscal, du crédit privé, des projections CBO, des spreads ou des prix de marché.</div>
+          <div class="faq-card"><strong>Lecture</strong> Le score courant exclut les projections CBO long terme. Elles restent visibles comme signal structurel, mais ne pilotent pas le stress de marché.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -575,9 +575,12 @@ def render_faq_page() -> None:
     with st.expander("Que mesure exactement le radar ?", expanded=True):
         st.markdown(
             """
-            Le radar suit plusieurs familles de signaux qui peuvent se renforcer :
-            dette publique, charge d'intérêts, déficit, projections CBO, crédit privé,
+            Le radar suit plusieurs familles de signaux courants qui peuvent se renforcer :
+            dette publique, charge d'intérêts, déficit, crédit privé,
             conditions de marché, liquidité et comparables internationaux.
+
+            Les projections CBO long terme sont conservées comme couche structurelle séparée :
+            elles renseignent la soutenabilité, mais ne décrivent pas un stress de marché immédiat.
 
             L'idée n'est pas de ramener toute la dette mondiale à un seul chiffre parfait,
             mais de repérer rapidement le canal qui se détériore.
@@ -602,19 +605,25 @@ def render_faq_page() -> None:
             Chaque série est transformée en signal comparable quand l'historique le permet :
             niveau courant, écart à son régime récent, sens du risque, puis normalisation de 0 à 100.
 
-            Les familles sont ensuite agrégées avec des pondérations explicites. Si une source manque,
-            le score est recalculé sur les familles disponibles au lieu de bloquer tout le dashboard.
+            Les familles courantes sont ensuite agrégées avec des pondérations explicites.
+            Le bucket `cbo_projection` est exclu de ce score courant parce qu'il repose sur des valeurs
+            terminales de projection longue. Il reste affiché comme score structurel séparé.
+
+            Si une source manque, le score courant est recalculé sur les familles disponibles au lieu
+            de bloquer tout le dashboard.
             """
         )
 
     with st.expander("Comment lire la carte de risque ?"):
         st.markdown(
             """
-            Le graphique classe les grandes familles de risque. Le tableau sous le graphique détaille
-            les signaux individuels : famille, nom du signal, valeur, unité, source, date et score.
+            Le graphique classe les grandes familles de risque et marque explicitement le bucket CBO
+            comme `structurel`. Le tableau sous le graphique détaille les signaux individuels : famille,
+            nom du signal, valeur, unité, source, date et score.
 
-            Une famille élevée n'est pas forcément une crise : c'est un pointeur. Il faut ouvrir les
-            sources et regarder si le signal vient d'une tendance lente ou d'un choc récent.
+            Les signaux courants sont listés avant les signaux structurels. Une famille élevée n'est
+            pas forcément une crise : c'est un pointeur. Il faut ouvrir les sources et regarder si le
+            signal vient d'une tendance lente, d'une projection longue ou d'un choc récent.
             """
         )
 
@@ -646,9 +655,9 @@ def render_faq_page() -> None:
             Le radar ne remplace pas une analyse pays, devise, maturité, détenteurs de dette,
             liquidité de marché ou soutenabilité budgétaire complète.
 
-            Le score n'est pas comparable mécaniquement à d'autres dashboards l0g. Il sert à ordonner
-            la lecture du risque de dette dans cette app, pas à prédire une date de défaut, de downgrade
-            ou de crise.
+            Le score courant n'est pas comparable mécaniquement à d'autres dashboards l0g. Il sert à
+            ordonner la lecture du stress de dette dans cette app, pas à prédire une date de défaut,
+            de downgrade ou de crise.
             """
         )
 
@@ -716,40 +725,27 @@ metrics = combine_metrics(
     massive_metrics_df,
 )
 buckets = bucket_scores(metrics)
-gscore = overall_score(buckets)
+gscore = current_stress_score(buckets)
 latest_export_issue = write_latest_json(build_latest_payload(metrics, buckets, issues))
 if latest_export_issue:
     issues.append(latest_export_issue)
 
-top_metric = None
-if not metrics.empty and metrics["risk_score"].notna().any():
-    top_metric = metrics.sort_values("risk_score", ascending=False).iloc[0]
-
 cbo_score = buckets.loc[buckets["bucket"] == "cbo_projection", "score"]
 fiscal_score = buckets.loc[buckets["bucket"] == "fiscal", "score"]
-fiscal_value = float(cbo_score.iloc[0]) if len(cbo_score) else float(fiscal_score.iloc[0]) if len(fiscal_score) else np.nan
+fiscal_value = float(fiscal_score.iloc[0]) if len(fiscal_score) else np.nan
 market_score = buckets.loc[buckets["bucket"].isin(["market_prices", "rates_market"]), "score"]
 market_value = float(market_score.iloc[0]) if len(market_score) else np.nan
 private_score = buckets.loc[buckets["bucket"].isin(["global_credit", "private_leverage"]), "score"]
 private_value = float(private_score.iloc[0]) if len(private_score) else np.nan
-top_signal_card = (
-    metric_card(
-        "Signal le plus tendu",
-        f"{top_metric['risk_score']:.0f}",
-        str(top_metric["name"])[:54],
-        score_color(top_metric["risk_score"]),
-    )
-    if top_metric is not None
-    else metric_card("Signal le plus tendu", "n/a", "Aucun signal score", "#6f9b94")
-)
+cbo_value = float(cbo_score.iloc[0]) if len(cbo_score) else np.nan
 st.markdown(
     f"""
     <div class="kpi-grid">
-        {metric_card("Risque dette global", format_number(gscore), score_label(gscore), score_color(gscore))}
-        {metric_card("CBO / fiscal", format_number(fiscal_value), score_label(fiscal_value), score_color(fiscal_value))}
+        {metric_card("Stress courant", format_number(gscore), score_label(gscore), score_color(gscore))}
+        {metric_card("Fiscal courant", format_number(fiscal_value), score_label(fiscal_value), score_color(fiscal_value))}
         {metric_card("Marche", format_number(market_value), score_label(market_value), score_color(market_value))}
         {metric_card("Credit BIS", format_number(private_value), score_label(private_value), score_color(private_value))}
-        {top_signal_card}
+        {metric_card("CBO structurel", format_number(cbo_value), score_label(cbo_value), score_color(cbo_value))}
     </div>
     """,
     unsafe_allow_html=True,
@@ -758,9 +754,10 @@ st.markdown(
 st.markdown(
     """
     <div class="help-card">
-      <strong>Lecture rapide.</strong> Le score 0-100 agrège des signaux de dette publique, de credit gap, de cout des interets,
-      de liquidite et de marche. 50 marque une zone elevee, 65 une surveillance active, 80 un stress.
-      Ce n'est pas une prediction : c'est un tableau de bord d'alerte, conçu pour dire ou regarder en premier.
+      <strong>Lecture rapide.</strong> Le score courant 0-100 agrège des signaux de dette publique,
+      de credit gap, de cout des interets, de liquidite et de marche. Les projections CBO long terme
+      sont affichees comme risque structurel, mais exclues du score courant parce qu'elles ne mesurent
+      pas un choc de marche actuel. 50 marque une zone elevee, 65 une surveillance active, 80 un stress.
     </div>
     """,
     unsafe_allow_html=True,
@@ -775,13 +772,25 @@ if issues:
             st.write(f"{issue.source}: {issue.detail}")
 
 st.markdown("## Carte de risque")
+st.markdown(
+    """
+    <div class="help-card">
+      <strong>Score courant vs structurel.</strong> Les buckets courants alimentent le score de stress.
+      Le bucket CBO reste visible pour la soutenabilite longue, mais il est marque structurel et exclu
+      du score courant.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if metrics.empty:
     st.warning("No data loaded yet. Check network access and API keys.")
     st.stop()
 
 bucket_view = buckets.copy()
+bucket_view["role"] = np.where(bucket_view["bucket"].isin(STRUCTURAL_BUCKETS), "structurel", "courant")
 bucket_view["bucket_label"] = bucket_view["bucket"].map(BUCKET_LABELS).fillna(bucket_view["bucket"])
+bucket_view.loc[bucket_view["role"] == "structurel", "bucket_label"] += " (structurel)"
 fig_bucket = go.Figure(
     go.Bar(
         x=round(bucket_view["score"], 1),
@@ -805,8 +814,12 @@ fig_bucket.update_layout(
 )
 st.plotly_chart(fig_bucket, width="stretch")
 
-table = metrics.sort_values("risk_score", ascending=False).copy()
+table = metrics.copy()
+table["role"] = np.where(table["bucket"].isin(STRUCTURAL_BUCKETS), "structurel", "courant")
+table["role_order"] = np.where(table["role"] == "structurel", 1, 0)
+table = table.sort_values(["role_order", "risk_score"], ascending=[True, False])
 table["famille"] = table["bucket"].map(BUCKET_LABELS).fillna(table["bucket"])
+table.loc[table["role"] == "structurel", "famille"] += " (structurel)"
 table["date"] = table["date"].dt.strftime("%Y-%m-%d")
 st.markdown(risk_table_html(table), unsafe_allow_html=True)
 with st.expander("Lire les signaux et les sources", expanded=False):
@@ -910,9 +923,9 @@ st.markdown("## Projections institutionnelles")
 st.markdown(
     """
     <div class="help-card">
-      <strong>Pourquoi CBO et BIS ensemble ?</strong> CBO donne la trajectoire budgetaire americaine,
-      BIS mesure l'ecart du credit prive a sa tendance.
-      Le risque devient plus serieux quand plusieurs familles se tendent en meme temps.
+      <strong>Deux horizons de lecture.</strong> CBO donne une trajectoire budgetaire longue :
+      c'est un signal structurel de soutenabilite, pas un choc courant. BIS mesure l'ecart du
+      credit prive a sa tendance et reste dans la lecture de stress courant.
     </div>
     """,
     unsafe_allow_html=True,

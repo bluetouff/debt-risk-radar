@@ -28,6 +28,7 @@ from catalog import (
     TREASURY_ENDPOINTS,
     WORLD_BANK_INDICATORS,
     ZSCORE_WINDOW_YEARS,
+    STRUCTURAL_BUCKETS,
 )
 
 
@@ -552,7 +553,7 @@ def cbo_projection_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "risk_score": risk_score,
                 "weight": meta["weight"],
                 "source": "CBO Open Data",
-                "rationale": "Latest CBO long-term projection vintage; terminal projected value.",
+                "rationale": "Latest CBO long-term projection vintage; terminal structural value, not a current market shock.",
             }
         )
     return pd.DataFrame(rows)
@@ -666,10 +667,19 @@ def bucket_scores(metrics: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("score", ascending=False)
 
 
-def overall_score(bucket_df: pd.DataFrame) -> float:
+def overall_score(bucket_df: pd.DataFrame, exclude_buckets: set[str] | None = None) -> float:
     if bucket_df.empty:
         return np.nan
-    return float(np.average(bucket_df["score"], weights=bucket_df["weight"]))
+    scoped = bucket_df
+    if exclude_buckets:
+        scoped = scoped[~scoped["bucket"].isin(exclude_buckets)]
+    if scoped.empty:
+        return np.nan
+    return float(np.average(scoped["score"], weights=scoped["weight"]))
+
+
+def current_stress_score(bucket_df: pd.DataFrame) -> float:
+    return overall_score(bucket_df, exclude_buckets=STRUCTURAL_BUCKETS)
 
 
 def score_label(score: float) -> str:

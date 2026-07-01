@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from catalog import BUCKET_LABELS, STRESS_LEVEL, WATCH_LEVEL
+from catalog import BUCKET_LABELS, STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS
 
 if Path(sys.argv[0]).name == "latest_export.py":
     os.environ.setdefault("DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE", "1")
@@ -37,7 +37,7 @@ from data import (
     fetch_world_bank,
     fred_metrics,
     massive_market_metrics,
-    overall_score,
+    current_stress_score,
     score_label,
     treasury_daily_metrics,
     world_bank_metrics,
@@ -128,7 +128,8 @@ def load_metric_snapshot(
 
 def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue]) -> dict:
     generated_at = datetime.now(timezone.utc).replace(microsecond=0)
-    overall = overall_score(buckets)
+    overall = current_stress_score(buckets)
+    structural_buckets = buckets[buckets["bucket"].isin(STRUCTURAL_BUCKETS)] if not buckets.empty else pd.DataFrame()
     source_rows = []
     if not metrics.empty:
         source_audit = (
@@ -159,13 +160,31 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                     "status": score_label(score),
                     "weight": json_value(float(row["weight"])) if pd.notna(row["weight"]) else None,
                     "metrics": int(row["n"]),
+                    "score_role": "structural" if str(row["bucket"]) in STRUCTURAL_BUCKETS else "current_stress",
+                    "included_in_overall": str(row["bucket"]) not in STRUCTURAL_BUCKETS,
                 }
             )
 
     top_rows = []
     if not metrics.empty:
-        top_metrics = metrics.sort_values("risk_score", ascending=False).head(LATEST_JSON_TOP_SIGNALS)
+        current_metrics = metrics[~metrics["bucket"].isin(STRUCTURAL_BUCKETS)]
+        top_metrics = current_metrics.sort_values("risk_score", ascending=False).head(LATEST_JSON_TOP_SIGNALS)
         top_rows = [metric_record(row) for _, row in top_metrics.iterrows()]
+
+    structural_rows = []
+    if not structural_buckets.empty:
+        for _, row in structural_buckets.sort_values("score", ascending=False).iterrows():
+            score = float(row["score"]) if pd.notna(row["score"]) else np.nan
+            structural_rows.append(
+                {
+                    "bucket": str(row["bucket"]),
+                    "label": BUCKET_LABELS.get(str(row["bucket"]), str(row["bucket"])),
+                    "score": json_value(score),
+                    "status": score_label(score),
+                    "metrics": int(row["n"]),
+                    "note": "Long-term structural projection excluded from current stress score.",
+                }
+            )
 
     return {
         "schema_version": "1.0",
@@ -191,9 +210,12 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
             },
         },
         "score": {
-            "overall": json_value(float(overall)) if pd.notna(overall) else None,
+            "current_stress": json_value(float(overall)) if pd.notna(overall) else None,
             "status": score_label(overall),
+            "methodology": "Current stress score excludes structural long-term CBO projections.",
+            "excluded_buckets": sorted(STRUCTURAL_BUCKETS),
             "buckets": bucket_rows,
+            "structural": structural_rows,
         },
         "top_signals": top_rows,
         "sources": source_rows,
@@ -246,7 +268,7 @@ def main() -> int:
             {
                 "output": args.output,
                 "generated_at": payload["generated_at"],
-                "overall": payload["score"]["overall"],
+                "current_stress": payload["score"]["current_stress"],
                 "status": payload["score"]["status"],
                 "top_signals": len(payload["top_signals"]),
                 "sources": len(payload["sources"]),

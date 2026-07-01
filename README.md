@@ -71,7 +71,7 @@ Apache sert ce fichier sur :
 https://debt.l0g.fr/latest.json
 ```
 
-Le JSON expose le score global, les scores par famille, les principaux signaux, les sources chargees, les seuils et les flux manquants. Il ne contient jamais de cle API.
+Le JSON expose le score de stress courant, les scores par famille, les principaux signaux, les sources chargees, les seuils et les flux manquants. Il ne contient jamais de cle API.
 Il est genere par `latest_export.py` et rafraichi par un timer systemd dedie, sans dependance a une visite navigateur.
 
 ## Structure
@@ -103,7 +103,9 @@ Le score est transforme sur une echelle 0-100 :
 risk_score = clip(50 + signed_z * 15, 0, 100)
 ```
 
-Les buckets sont ensuite agreges avec des poids :
+Les buckets courants sont ensuite agreges avec des poids. Les projections CBO long terme sont conservees
+comme indicateur structurel separe : elles sont affichees et exportees, mais exclues du score de stress
+courant parce qu'elles ne mesurent pas un choc de marche actuel.
 
 - Fiscal solvency : 22 %
 - Rates and market stress : 18 %
@@ -112,7 +114,7 @@ Les buckets sont ensuite agreges avec des poids :
 - Treasury daily debt : 10 %
 - Global comparables : 4 %
 - BIS global credit : 10 %
-- CBO projections : 10 %
+- CBO projections : 10 %, structurel, exclu du score courant
 - Massive market prices : 4 %
 
 Seuils d'affichage :

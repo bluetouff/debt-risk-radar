@@ -335,6 +335,9 @@ BUCKET_LABELS = {
 }
 
 
+STRUCTURAL_BUCKETS = {"cbo_projection"}
+
+
 BUCKET_WEIGHTS = {
     "fiscal": 0.22,
     "rates_market": 0.18,
