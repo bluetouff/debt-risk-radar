@@ -37,8 +37,22 @@ Allowlist fonctionnelle :
 - `api.worldbank.org`
 - `data.bis.org`
 - `raw.githubusercontent.com` pour le depot officiel `US-CBO/cbo-data`
-- `api.stlouisfed.org` via `fredapi`
-- `api.massive.com` ou `MASSIVE_BASE_URL`
+- `api.stlouisfed.org`
+- `api.massive.com` (`MASSIVE_BASE_URL` doit conserver cet hote HTTPS)
+
+Les lectures sortantes passent par `http_cache.py` : allowlist HTTPS, pas de redirection,
+delais et tailles limites, cache SQLite prive sans cle API ni en-tete d'autorisation.
+Les echecs ne contournent jamais le cache. Les reponses expirees ne sont pas reutilisees
+comme donnees courantes. Les codes 429 suspendent le fournisseur selon `Retry-After`
+(au moins 15 minutes), les erreurs 401/403 pendant six heures, les autres echecs
+pendant 15 minutes. Aucun retry immediat. Les appels Massive sont espaces d'au moins
+13 secondes dans cette application ; les quotas partages avec d'autres applications
+doivent etre coordonnes a l'echelle du compte.
+
+Le service public est en lecture seule du cache et ne peut plus ecrire `latest.json`.
+Les restrictions IP systemd limitent ses connexions au loopback. Le collecteur planifie
+est seul autorise a interroger les fournisseurs. Creer et remplir le cache avant
+de demarrer l'application en lecture seule.
 
 ## Durcissement serveur
 

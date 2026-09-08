@@ -59,7 +59,7 @@ En local comme en prod, la configuration Streamlit fournie force l'ecoute sur `1
 
 ## Export machine-readable
 
-En production, le dashboard ecrit un snapshot public dans :
+En production, le collecteur planifie ecrit un snapshot public dans :
 
 ```text
 /var/www/debt-risk-radar/latest.json
@@ -73,6 +73,17 @@ https://debt.l0g.fr/latest.json
 
 Le JSON expose le score de stress courant, les scores par famille, les principaux signaux, les sources chargees, les seuils et les flux manquants. Il ne contient jamais de cle API.
 Il est genere par `latest_export.py` et rafraichi par un timer systemd dedie, sans dependance a une visite navigateur.
+
+Le schema 1.1 ajoute tous les `signals`, leur qualite et leur tolerance de fraicheur,
+ainsi que `quality` et `valid_until`. Le score courant est `null` si sa couverture est
+incomplete : aucune valeur manquante n'est remplacee par 50. Un consommateur doit
+verifier `valid_until`, `quality` et `score.coverage` avant d'utiliser le score.
+
+Les requetes sont mises en cache sur disque pendant six heures pour Treasury/FRED/Massive,
+et vingt-quatre heures pour BIS/CBO/World Bank. Les redemarrages du collecteur ne vident
+pas ce cache. En production, l'application publique lit uniquement le cache ; les visites
+ne declenchent aucun appel aux fournisseurs. Les echecs et quotas declenchent une pause
+persistante par fournisseur, sans retry immediat. Voir `DEPLOYMENT.md` pour les services.
 
 ## Structure
 
@@ -92,7 +103,10 @@ debt-risk-radar/
 
 ## Scoring
 
-Chaque serie est convertie en z-score sur fenetre mobile de 5 ans, signe selon la direction de risque :
+Les series FRED et les niveaux Treasury utilisent une fenetre de cinq ans,
+World Bank et les ratios BIS dix ans, les prix Massive deux ans et le CBO trente ans.
+Certains signaux utilisent aussi des seuils de niveau, notamment le credit gap,
+la croissance de dette et les projections CBO. Le z-score est signe selon le sens du risque :
 
 - `direction = up` : une hausse augmente le risque.
 - `direction = down` : une baisse augmente le risque.
@@ -106,6 +120,9 @@ risk_score = clip(50 + signed_z * 15, 0, 100)
 Les buckets courants sont ensuite agreges avec des poids. Les projections CBO long terme sont conservees
 comme indicateur structurel separe : elles sont affichees et exportees, mais exclues du score de stress
 courant parce qu'elles ne mesurent pas un choc de marche actuel.
+Une famille incomplete n'a pas de score agrege. Le score courant exige toutes les
+familles courantes completes. Les observations valides restent affichees individuellement.
+Les poids courants ci-dessous sont normalises par leur somme (90 %), hors CBO.
 
 - Fiscal solvency : 22 %
 - Rates and market stress : 18 %

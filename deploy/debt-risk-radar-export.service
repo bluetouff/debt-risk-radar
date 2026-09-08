@@ -10,8 +10,11 @@ Group=debt-radar
 WorkingDirectory=/opt/debt-risk-radar
 EnvironmentFile=/etc/debt-risk-radar.env
 Environment=HOME=/var/lib/debt-risk-radar
+Environment=DEBT_RISK_RADAR_CACHE_DIR=/var/lib/debt-risk-radar/cache
+Environment=DEBT_RISK_RADAR_READ_ONLY=0
 Environment=DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE=1
 ExecStart=/opt/debt-risk-radar/.venv/bin/python /opt/debt-risk-radar/latest_export.py --output /var/www/debt-risk-radar/latest.json
+TimeoutStartSec=10min
 UMask=0022
 
 NoNewPrivileges=true

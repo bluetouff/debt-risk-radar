@@ -7,6 +7,7 @@ Objectif : exposer Streamlit uniquement via Apache en HTTPS, sans jamais publier
 ```bash
 sudo adduser --system --group --home /var/lib/debt-risk-radar debt-radar
 sudo install -d -o debt-radar -g debt-radar -m 700 /var/lib/debt-risk-radar
+sudo install -d -o debt-radar -g debt-radar -m 700 /var/lib/debt-risk-radar/cache
 sudo install -d -o debt-radar -g debt-radar -m 755 /var/www/debt-risk-radar
 sudo install -d -o debt-radar -g debt-radar -m 755 /opt/debt-risk-radar
 ```
@@ -45,9 +46,9 @@ sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar.service /etc/systemd/system/
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.service /etc/systemd/system/debt-risk-radar-export.service
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.timer /etc/systemd/system/debt-risk-radar-export.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now debt-risk-radar
-sudo systemctl enable --now debt-risk-radar-export.timer
 sudo systemctl start debt-risk-radar-export.service
+sudo systemctl enable --now debt-risk-radar-export.timer
+sudo systemctl enable --now debt-risk-radar
 sudo systemctl status debt-risk-radar
 ```
 
@@ -116,6 +117,7 @@ sudo rsync -a --delete \
   "$DEBT_RISK_RADAR_SRC"/ /opt/debt-risk-radar/
 sudo chown -R root:root /opt/debt-risk-radar
 sudo install -d -o debt-radar -g debt-radar -m 755 /var/www/debt-risk-radar
+sudo install -d -o debt-radar -g debt-radar -m 700 /var/lib/debt-risk-radar/cache
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar.service /etc/systemd/system/debt-risk-radar.service
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.service /etc/systemd/system/debt-risk-radar-export.service
 sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.timer /etc/systemd/system/debt-risk-radar-export.timer
@@ -123,12 +125,20 @@ sudo systemctl daemon-reload
 sudo cp /opt/debt-risk-radar/deploy/apache-debt-risk-radar.conf /etc/apache2/sites-available/debt-risk-radar.conf
 sudo apache2ctl configtest
 sudo systemctl reload apache2
-sudo systemctl restart debt-risk-radar
-sudo systemctl enable --now debt-risk-radar-export.timer
 sudo systemctl start debt-risk-radar-export.service
+sudo systemctl enable --now debt-risk-radar-export.timer
+sudo systemctl restart debt-risk-radar
 ```
 
 ## Notes securite
+
+- Cette mise a jour exige de recopier les deux services et le timer, pas seulement le Python.
+- Verifier `quality`, `score.coverage`, `signals` et `valid_until` dans `latest.json` apres la premiere collecte.
+- Le schema 1.1 suspend `score.current_stress` (`null`) si un signal courant manque ; aucune imputation a 50.
+- Le cache persiste entre les executions : six heures pour Treasury/FRED/Massive, un jour pour BIS/CBO/World Bank.
+- Un second export dans le TTL ne doit declencher aucun appel fournisseur.
+- Si le score courant est indisponible, le collecteur publie le JSON degrade et sort avec le code 2.
+  Inspecter `quality.unavailable_signals` et le journal avant de poursuivre la bascule.
 
 - Streamlit reste une app serveur : garde-la derriere Apache, jamais exposee directement.
 - Garde `showErrorDetails=false` en production.

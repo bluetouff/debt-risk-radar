@@ -14,9 +14,10 @@ from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
-from fredapi import Fred
+
+from http_cache import DataUnavailable, get_bytes, get_json, read_only
+from quality import assess_metrics, expected_metrics
 
 from catalog import (
     BIS_BULK_FEEDS,
@@ -26,16 +27,11 @@ from catalog import (
     CURRENT_STRESS_BUCKETS,
     FRED_SERIES,
     MASSIVE_MARKET_SERIES,
-    NEUTRAL_RISK_SCORE,
     TREASURY_ENDPOINTS,
     WORLD_BANK_INDICATORS,
     ZSCORE_WINDOW_YEARS,
     STRUCTURAL_BUCKETS,
 )
-
-
-class DataUnavailable(Exception):
-    """Raised when an upstream source cannot be reached or parsed."""
 
 
 @dataclass(frozen=True)
@@ -45,6 +41,9 @@ class DataIssue:
 
 
 def cache_data(*args, **kwargs):
+    if read_only():
+        kwargs["ttl"] = 60
+        return st.cache_data(*args, **kwargs)
     if os.environ.get("DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE") == "1":
         return lambda func: func
     return st.cache_data(*args, **kwargs)
@@ -86,13 +85,6 @@ def massive_key_available() -> bool:
     return bool(os.environ.get("MASSIVE_API_KEY") or _streamlit_secret("MASSIVE_API_KEY"))
 
 
-def get_fred() -> Fred:
-    key = os.environ.get("FRED_API_KEY") or _streamlit_secret("FRED_API_KEY")
-    if not key:
-        raise DataUnavailable("FRED_API_KEY is missing.")
-    return Fred(api_key=key)
-
-
 def iter_fred_catalog() -> Iterable[Tuple[str, str, dict]]:
     for bucket, series_map in FRED_SERIES.items():
         for series_id, meta in series_map.items():
@@ -101,16 +93,27 @@ def iter_fred_catalog() -> Iterable[Tuple[str, str, dict]]:
 
 @cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], List[DataIssue]]:
-    if not fred_key_available():
+    if not fred_key_available() and not read_only():
         return {}, [DataIssue("FRED", "FRED_API_KEY missing. FRED metrics skipped.")]
 
-    fred = get_fred()
+    key = os.environ.get("FRED_API_KEY") or _streamlit_secret("FRED_API_KEY")
     data: Dict[str, pd.Series] = {}
     issues: List[DataIssue] = []
 
     for _, series_id, _ in iter_fred_catalog():
         try:
-            series = fred.get_series(series_id, observation_start=start).dropna()
+            payload = get_json("https://api.stlouisfed.org/fred/series/observations", ttl=6 * 3600,
+                               params={"api_key": key, "series_id": series_id, "file_type": "json",
+                                       "observation_start": start, "limit": 100000})
+            observations = payload.get("observations", [])
+            if payload.get("count", len(observations)) != len(observations):
+                raise DataUnavailable("Incomplete FRED observations response.")
+            series = pd.Series(
+                [item["value"] for item in observations],
+                index=pd.to_datetime([item["date"] for item in observations]),
+                dtype="object",
+            )
+            series = pd.to_numeric(series, errors="coerce").dropna()
             if len(series) > 0:
                 series.index = pd.to_datetime(series.index)
                 data[series_id] = series.astype(float)
@@ -123,12 +126,11 @@ def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], 
 
 
 def _fiscaldata_get(url: str, params: dict) -> dict:
-    response = requests.get(url, params=params, timeout=30)
-    if response.status_code != 200:
-        raise DataUnavailable(f"HTTP {response.status_code}: {response.text[:200]}")
-    payload = response.json()
+    payload = get_json(url, params=params, ttl=6 * 3600)
     if "data" not in payload:
         raise DataUnavailable("No data field in Fiscal Data response.")
+    if int(payload.get("meta", {}).get("total-pages", 1)) > 1:
+        raise DataUnavailable("Incomplete Treasury response: pagination required.")
     return payload
 
 
@@ -166,10 +168,7 @@ def fetch_world_bank(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
         url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
         params = {"format": "json", "per_page": 120}
         try:
-            response = requests.get(url, params=params, timeout=30)
-            if response.status_code != 200:
-                raise DataUnavailable(f"HTTP {response.status_code}")
-            payload = response.json()
+            payload = get_json(url, params=params, ttl=24 * 3600)
             if not isinstance(payload, list) or len(payload) < 2:
                 raise DataUnavailable("Unexpected World Bank payload.")
             for item in payload[1]:
@@ -200,14 +199,17 @@ def _fy_to_timestamp(value: str) -> pd.Timestamp:
 
 
 def _download_bis_flat_csv(url: str) -> pd.DataFrame:
-    response = requests.get(url, timeout=45)
-    if response.status_code != 200:
-        raise DataUnavailable(f"HTTP {response.status_code}: {response.text[:200]}")
-    archive = zipfile.ZipFile(io.BytesIO(response.content))
-    csv_names = [name for name in archive.namelist() if name.endswith(".csv")]
-    if not csv_names:
-        raise DataUnavailable("BIS bulk archive does not contain a CSV file.")
-    return pd.read_csv(archive.open(csv_names[0]))
+    body = get_bytes(url, ttl=24 * 3600)
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        csv_files = [item for item in archive.infolist() if item.filename.endswith(".csv")]
+        if len(csv_files) != 1 or csv_files[0].file_size > 100 * 1024 * 1024:
+            raise DataUnavailable("BIS archive has unexpected contents or exceeds the size limit.")
+        with archive.open(csv_files[0]) as handle:
+            return pd.read_csv(handle)
+
+
+def _bis_codes(values: pd.Series) -> pd.Series:
+    return values.astype(str).str.split(":", n=1).str[0].str.strip()
 
 
 @cache_data(ttl=24 * 3600, show_spinner=False)
@@ -221,13 +223,14 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
 
     try:
         gap_df = _download_bis_flat_csv(BIS_BULK_FEEDS["credit_gap"]["url"])
-        gap_df = gap_df[gap_df["BORROWERS_CTY:Borrowers' country"].astype(str).str.startswith(f"{bis_country}:")]
+        gap_df = gap_df[_bis_codes(gap_df["BORROWERS_CTY:Borrowers' country"]) == bis_country]
         for dtype, metric_name, unit in [
-            ("C: Credit-to-GDP gaps (actual-trend)", "Credit-to-GDP gap", "pp"),
-            ("A: Credit-to-GDP ratios (actual data)", "Credit-to-GDP ratio", "% GDP"),
+            ("C", "Credit-to-GDP gap", "pp"),
+            ("A", "Credit-to-GDP ratio", "% GDP"),
         ]:
-            sub = gap_df[gap_df["CG_DTYPE:Credit gap data type"] == dtype].copy()
+            sub = gap_df[_bis_codes(gap_df["CG_DTYPE:Credit gap data type"]) == dtype].copy()
             if sub.empty:
+                issues.append(DataIssue("BIS Data Portal", f"{metric_name}: missing series."))
                 continue
             sub["date"] = sub["TIME_PERIOD:Time period or range"].map(_quarter_to_timestamp)
             sub["value"] = pd.to_numeric(sub["OBS_VALUE:Observation Value"], errors="coerce")
@@ -246,15 +249,17 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
 
     try:
         dsr_df = _download_bis_flat_csv(BIS_BULK_FEEDS["dsr"]["url"])
-        dsr_df = dsr_df[dsr_df["BORROWERS_CTY:Borrowers' country"].astype(str).str.startswith(f"{bis_country}:")]
+        dsr_df = dsr_df[_bis_codes(dsr_df["BORROWERS_CTY:Borrowers' country"]) == bis_country]
         dsr_df["date"] = dsr_df["TIME_PERIOD:Time period or range"].map(_quarter_to_timestamp)
         dsr_df["value"] = pd.to_numeric(dsr_df["OBS_VALUE:Observation Value"], errors="coerce")
         for borrower, metric_name in [
-            ("H: Households & NPISHs", "Household debt service ratio"),
-            ("PNFS: Private non-financial sector", "Private non-financial debt service ratio"),
-            ("NFC: Non-financial corporations", "Corporate debt service ratio"),
+            ("H", "Household debt service ratio"),
+            ("P", "Private non-financial debt service ratio"),
+            ("N", "Corporate debt service ratio"),
         ]:
-            sub = dsr_df[dsr_df["DSR_BORROWERS:Borrowers"] == borrower]
+            sub = dsr_df[_bis_codes(dsr_df["DSR_BORROWERS:Borrowers"]) == borrower]
+            if sub.empty:
+                issues.append(DataIssue("BIS Data Portal", f"{metric_name}: missing series."))
             for _, item in sub.dropna(subset=["value"]).iterrows():
                 rows.append(
                     {
@@ -275,10 +280,7 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
 def fetch_cbo_projections() -> Tuple[pd.DataFrame, List[DataIssue]]:
     dataset = CBO_DATASETS["long_term_budget"]
     try:
-        response = requests.get(dataset["url"], timeout=30)
-        if response.status_code != 200:
-            raise DataUnavailable(f"HTTP {response.status_code}: {response.text[:200]}")
-        df = pd.read_csv(io.StringIO(response.text))
+        df = pd.read_csv(io.BytesIO(get_bytes(dataset["url"], ttl=24 * 3600)))
         df["date"] = df["date"].map(_fy_to_timestamp)
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         return df.dropna(subset=["value"]), []
@@ -286,24 +288,15 @@ def fetch_cbo_projections() -> Tuple[pd.DataFrame, List[DataIssue]]:
         return pd.DataFrame(), [DataIssue(dataset["source"], _safe_error(exc))]
 
 
-def _massive_session() -> requests.Session:
-    key = os.environ.get("MASSIVE_API_KEY") or _streamlit_secret("MASSIVE_API_KEY")
-    if not key:
-        raise DataUnavailable("MASSIVE_API_KEY missing. Massive market metrics skipped.")
-    session = requests.Session()
-    session.headers["Authorization"] = f"Bearer {key}"
-    return session
-
-
 @cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_massive_market(days: int = 730) -> Tuple[Dict[str, pd.Series], List[DataIssue]]:
-    if not massive_key_available():
+    if not massive_key_available() and not read_only():
         return {}, [DataIssue("Massive Market Data", "MASSIVE_API_KEY missing. Market price metrics skipped.")]
 
     base_url = (os.environ.get("MASSIVE_BASE_URL") or _streamlit_secret("MASSIVE_BASE_URL") or "https://api.massive.com").rstrip("/")
-    session = _massive_session()
-    end = date.today()
-    start = end - timedelta(days=days)
+    key = os.environ.get("MASSIVE_API_KEY") or _streamlit_secret("MASSIVE_API_KEY")
+    end = pd.Timestamp.now(tz="America/New_York").date() - timedelta(days=1)
+    start = end - timedelta(days=max(days - 1, 0))
     data: Dict[str, pd.Series] = {}
     issues: List[DataIssue] = []
 
@@ -311,17 +304,21 @@ def fetch_massive_market(days: int = 730) -> Tuple[Dict[str, pd.Series], List[Da
         path = f"/v2/aggs/ticker/{ticker}/range/1/day/{start.isoformat()}/{end.isoformat()}"
         params = {"adjusted": "true", "limit": 5000}
         try:
-            response = session.get(base_url + path, params=params, timeout=30)
-            if response.status_code != 200:
-                raise DataUnavailable(f"HTTP {response.status_code}: {response.text[:200]}")
-            payload = response.json()
+            payload = get_json(base_url + path, params=params, headers={"Authorization": f"Bearer {key}"},
+                               ttl=6 * 3600, cache_key=f"daily:{ticker}:{days}")
+            if payload.get("next_url"):
+                raise DataUnavailable("Incomplete Massive response: pagination required.")
             rows = []
             for item in payload.get("results") or []:
                 if item.get("t") is None or item.get("c") is None:
                     continue
-                rows.append((pd.to_datetime(item["t"], unit="ms", utc=True).tz_convert(None).normalize(), float(item["c"])))
+                rows.append((pd.to_datetime(item["t"], unit="ms", utc=True).tz_convert("America/New_York").tz_localize(None).normalize(), float(item["c"])))
             if rows:
+                if len({ts for ts, _ in rows}) != len(rows) or any(not np.isfinite(close) or close <= 0 for _, close in rows):
+                    raise DataUnavailable("Invalid or duplicate Massive daily observations.")
                 series = pd.Series({ts: close for ts, close in rows}).sort_index()
+                if series.index[-1].date() > end:
+                    raise DataUnavailable("Massive response includes an unfinished or future session.")
                 data[ticker] = series
             else:
                 issues.append(DataIssue("Massive Market Data", f"{ticker}: no daily aggregate rows."))
@@ -332,15 +329,17 @@ def fetch_massive_market(days: int = 730) -> Tuple[Dict[str, pd.Series], List[Da
 
 
 def zscore_latest(series: pd.Series, direction: str, window_years: int = ZSCORE_WINDOW_YEARS) -> dict:
-    clean = series.dropna().sort_index()
-    if len(clean) < 8:
+    clean = series.replace([np.inf, -np.inf], np.nan).dropna().sort_index()
+    if clean.empty:
+        return {"z": np.nan, "signed_z": np.nan, "current": np.nan, "date": pd.NaT}
+    if clean.index.has_duplicates:
         return {"z": np.nan, "signed_z": np.nan, "current": np.nan, "date": pd.NaT}
 
     current = clean.iloc[-1]
     current_date = clean.index[-1]
     cutoff = current_date - pd.DateOffset(years=window_years)
     window = clean.loc[cutoff:]
-    if len(window) < 6 or window.std() == 0:
+    if len(clean) < 8 or len(window) < 6 or window.std() == 0:
         z = np.nan
     else:
         z = (current - window.mean()) / window.std()
@@ -555,7 +554,7 @@ def cbo_projection_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "risk_score": risk_score,
                 "weight": meta["weight"],
                 "source": "CBO Open Data",
-                "rationale": "Latest CBO long-term projection vintage; terminal structural value, not a current market shock.",
+                "rationale": "CBO February 2026 vintage; terminal structural value, not a current market shock.",
             }
         )
     return pd.DataFrame(rows)
@@ -586,7 +585,7 @@ def massive_market_metrics(all_data: Dict[str, pd.Series]) -> pd.DataFrame:
                 "risk_score": risk_score,
                 "weight": meta["weight"],
                 "source": meta["source"],
-                "rationale": f"{meta['rationale']} 30d return {returns_30d.iloc[-1]:+.2f}% if available.",
+                "rationale": f"{meta['rationale']} Price change over 30 trading sessions {returns_30d.iloc[-1]:+.2f}%. Split-adjusted prices; cash distributions excluded, not total return.",
             }
         )
 
@@ -614,7 +613,7 @@ def massive_market_metrics(all_data: Dict[str, pd.Series]) -> pd.DataFrame:
                 "risk_score": risk_points_from_z(scored["signed_z"]),
                 "weight": weight,
                 "source": "Massive Market Data",
-                "rationale": "Derived market ratio from Massive daily adjusted closes.",
+                "rationale": "Derived price ratio from Massive split-adjusted closes; cash distributions excluded, not a yield spread.",
             }
         )
 
@@ -627,7 +626,7 @@ def massive_market_metrics(all_data: Dict[str, pd.Series]) -> pd.DataFrame:
                 {
                     "bucket": "market_prices",
                     "series_id": "HYG 30d realized vol",
-                    "name": "HYG 30d realized volatility",
+                    "name": "HYG 30-session realized price volatility",
                     "unit": "%",
                     "date": scored["date"],
                     "current": scored["current"],
@@ -644,11 +643,11 @@ def massive_market_metrics(all_data: Dict[str, pd.Series]) -> pd.DataFrame:
 def combine_metrics(*frames: pd.DataFrame) -> pd.DataFrame:
     valid = [frame for frame in frames if frame is not None and not frame.empty]
     if not valid:
-        return pd.DataFrame()
+        return assess_metrics(pd.DataFrame())
     df = pd.concat(valid, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"])
     df["weighted_score"] = df["risk_score"] * df["weight"]
-    return df
+    return assess_metrics(df)
 
 
 def bucket_scores(metrics: pd.DataFrame) -> pd.DataFrame:
@@ -656,14 +655,21 @@ def bucket_scores(metrics: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["bucket", "score", "weight", "n"])
 
     rows = []
-    for bucket, sub in metrics.dropna(subset=["risk_score"]).groupby("bucket"):
-        metric_score = np.average(sub["risk_score"], weights=sub["weight"])
+    catalog = expected_metrics()
+    for bucket, sub in metrics.groupby("bucket"):
+        sub = sub[np.isfinite(sub["risk_score"])]
+        if "eligible" in sub:
+            sub = sub[sub["eligible"]]
+        expected = sum(key[0] == bucket for key in catalog)
+        metric_score = np.average(sub["risk_score"], weights=sub["weight"]) if len(sub) == expected and expected else np.nan
         rows.append(
             {
                 "bucket": bucket,
                 "score": float(metric_score),
                 "weight": BUCKET_WEIGHTS.get(bucket, 0.05),
                 "n": int(len(sub)),
+                "expected": expected,
+                "coverage": min(len(sub) / expected, 1.0) if expected else 0.0,
             }
         )
     return pd.DataFrame(rows).sort_values("score", ascending=False)
@@ -684,8 +690,9 @@ def score_coverage(
         denominator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) for bucket in expected)
         if denominator <= 0:
             return 0.0
-        present = set(scoped["bucket"])
-        numerator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) for bucket in expected if bucket in present)
+        coverage = {row["bucket"]: float(row.get("coverage", 1.0 if pd.notna(row["score"]) else 0.0))
+                    for _, row in scoped.iterrows()}
+        numerator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) * coverage.get(bucket, 0.0) for bucket in expected)
         return float(np.clip(numerator / denominator, 0, 1))
     denominator = sum(BUCKET_WEIGHTS.get(bucket, 0.0) for bucket in BUCKET_WEIGHTS)
     if denominator <= 0:
@@ -697,7 +704,6 @@ def overall_score(
     bucket_df: pd.DataFrame,
     exclude_buckets: set[str] | None = None,
     expected_buckets: Iterable[str] | None = None,
-    neutral_missing: bool = False,
 ) -> float:
     if bucket_df.empty and not expected_buckets:
         return np.nan
@@ -708,31 +714,18 @@ def overall_score(
         expected = list(expected_buckets)
         if not scoped.empty:
             scoped = scoped[scoped["bucket"].isin(expected)]
-        if neutral_missing:
-            present = set(scoped["bucket"]) if not scoped.empty else set()
-            missing_rows = [
-                {
-                    "bucket": bucket,
-                    "score": NEUTRAL_RISK_SCORE,
-                    "weight": BUCKET_WEIGHTS.get(bucket, 0.0),
-                    "n": 0,
-                }
-                for bucket in expected
-                if bucket not in present
-            ]
-            if missing_rows:
-                scoped = pd.concat([scoped, pd.DataFrame(missing_rows)], ignore_index=True)
     if scoped.empty:
         return np.nan
     return float(np.average(scoped["score"], weights=scoped["weight"]))
 
 
 def current_stress_score(bucket_df: pd.DataFrame) -> float:
+    if score_coverage(bucket_df, expected_buckets=CURRENT_STRESS_BUCKETS) < 1 - 1e-9:
+        return np.nan
     return overall_score(
         bucket_df,
         exclude_buckets=STRUCTURAL_BUCKETS,
         expected_buckets=CURRENT_STRESS_BUCKETS,
-        neutral_missing=True,
     )
 
 

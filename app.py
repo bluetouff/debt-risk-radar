@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from catalog import BUCKET_LABELS, WATCH_LEVEL, STRESS_LEVEL, STRUCTURAL_BUCKETS
+from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, WATCH_LEVEL, STRESS_LEVEL, STRUCTURAL_BUCKETS
 from data import (
     bis_credit_metrics,
     bucket_scores,
@@ -37,10 +37,10 @@ from data import (
     current_stress_score,
     score_color,
     score_label,
+    score_coverage,
     treasury_daily_metrics,
     world_bank_metrics,
 )
-from latest_export import build_latest_payload, write_latest_json
 
 
 def env_int(name: str, default: int, minimum: int | None = None) -> int:
@@ -59,6 +59,8 @@ VIEW_PARAM = "view"
 DEFAULT_COUNTRY = "USA"
 DEFAULT_FRED_START = "1990-01-01"
 DEFAULT_TREASURY_START = "2015-01-01"
+QUALITY_LABELS = {"ok": "Disponible", "projection": "Projection", "missing": "Absent",
+                  "stale": "Trop ancien", "invalid": "Invalide", "unscored": "Historique insuffisant"}
 
 
 def query_value(name: str, default: str = "") -> str:
@@ -74,11 +76,6 @@ def current_view() -> str:
 
 
 def install_auto_refresh(seconds: int = AUTO_REFRESH_SECONDS) -> None:
-    refresh_marker = st.query_params.get(AUTO_REFRESH_PARAM)
-    if refresh_marker and st.session_state.get("last_auto_refresh_marker") != refresh_marker:
-        st.cache_data.clear()
-        st.session_state["last_auto_refresh_marker"] = refresh_marker
-
     st.html(
         f"""
         <script>
@@ -463,7 +460,7 @@ def metric_card(label: str, value: str, sub: str, color: str) -> str:
 
 def format_number(value: float, unit: str = "") -> str:
     if pd.isna(value):
-        return "n/a"
+        return "N/D"
     if abs(value) >= 1000:
         return f"{value:,.0f} {unit}".strip()
     return f"{value:,.2f} {unit}".strip()
@@ -480,21 +477,23 @@ def risk_table_html(table: pd.DataFrame, limit: int = 16) -> str:
         "</div>"
     ]
     for _, row in table.head(limit).iterrows():
-        risk_score = float(row["risk_score"]) if pd.notna(row["risk_score"]) else 0.0
-        width = max(0.0, min(100.0, risk_score))
+        risk_score = float(row["risk_score"])
+        width = max(0.0, min(100.0, risk_score)) if pd.notna(risk_score) else 0.0
+        score_text = f"{risk_score:.0f}" if pd.notna(risk_score) else "N/D"
         rows.append(
             '<div class="risk-row">'
             f'<div class="risk-cell risk-family" data-label="famille">{html.escape(str(row["famille"]))}</div>'
             '<div class="risk-cell" data-label="signal">'
             f'{html.escape(str(row["name"]))}'
             f'<div class="detail-meta">{html.escape(str(row["source"]))} · {html.escape(str(row["date"]))}</div>'
+            f'<div class="detail-meta">{QUALITY_LABELS.get(row.get("quality"), "Qualité inconnue")}</div>'
             "</div>"
             f'<div class="risk-cell" data-label="valeur">{format_number(float(row["current"]))}</div>'
             f'<div class="risk-cell risk-muted" data-label="unite">{html.escape(str(row["unit"]))}</div>'
             '<div class="risk-cell" data-label="risque">'
             '<div class="risk-score">'
             f'<div class="risk-bar"><span style="width:{width:.0f}%"></span></div>'
-            f"<strong>{risk_score:.0f}</strong>"
+            f"<strong>{score_text}</strong>"
             "</div>"
             "</div>"
             "</div>"
@@ -609,8 +608,9 @@ def render_faq_page() -> None:
             Le bucket `cbo_projection` est exclu de ce score courant parce qu'il repose sur des valeurs
             terminales de projection longue. Il reste affiché comme score structurel séparé.
 
-            Si une source manque, le score courant est recalculé sur les familles disponibles au lieu
-            de bloquer tout le dashboard.
+            Si un signal courant attendu manque, est trop ancien ou ne peut pas être calculé,
+            le score global devient indisponible. Aucun score neutre n'est inventé et les poids
+            des autres familles ne sont pas augmentés. Les signaux valides restent consultables.
             """
         )
 
@@ -633,8 +633,9 @@ def render_faq_page() -> None:
             Certaines sources sont gratuites et sans clé, comme Treasury, BIS, CBO ou World Bank.
             D'autres nécessitent une clé serveur, comme FRED ou Massive Market Data.
 
-            Si une clé manque ou si une API échoue, le flux est signalé dans le bloc d'issues et exclu
-            du calcul. Les clés ne sont jamais affichées dans l'interface.
+            Un flux absent, en erreur ou trop ancien est signalé dans la couverture. Sa valeur
+            ne remplace jamais une observation récente. Le score courant est suspendu tant que
+            les signaux attendus ne sont pas tous disponibles.
             """
         )
 
@@ -642,11 +643,34 @@ def render_faq_page() -> None:
         st.markdown(
             f"""
             L'app se rafraîchit automatiquement toutes les `{AUTO_REFRESH_SECONDS // 60}` minutes.
-            Les caches Streamlit évitent d'appeler inutilement les sources lentes.
+            Les observations sont collectées au plus toutes les six heures pour Treasury, FRED et
+            Massive, et toutes les vingt-quatre heures pour BIS, CBO et World Bank.
+            Une visite ou un rafraîchissement de la page publique ne lance aucune collecte.
 
             Attention : beaucoup de séries publiques sont trimestrielles, annuelles ou publiées avec délai.
             Le rafraîchissement de l'app ne transforme pas une série lente en donnée temps réel.
             """
+        )
+
+    with st.expander("Comment lire une qualité dégradée ou une date ancienne ?"):
+        st.markdown(
+            "La qualité décrit la disponibilité des données, indépendamment du niveau de risque économique. "
+            "Les contrôles portent sur chaque signal : présence, valeur finie, date, historique et fraîcheur. "
+            "Les seuils de tolérance sont de 10 jours pour les observations quotidiennes, 28 pour les "
+            "hebdomadaires, 280 pour les séries FRED trimestrielles datées en début de période et 300 "
+            "pour BIS daté en fin de trimestre. Les séries annuelles disposent de 900 jours en fin "
+            "de période, ou 1 100 en début de période. Ce sont des tolérances de surveillance, "
+            "pas une garantie de disposer de la dernière publication. Les périodes ne sont pas "
+            "les dates de publication. Le CBO utilise le millésime de février 2026 : 2056 est "
+            "un horizon de projection, jamais une date de fraîcheur."
+        )
+
+    with st.expander("Les ETF mesurent-ils un rendement total ou un spread ?"):
+        st.markdown(
+            "Les prix Massive utilisés sont corrigés des splits, mais pas des distributions en espèces. "
+            "Une baisse lors d'un détachement peut donc affecter le signal. Les variations portent sur "
+            "30 séances, pas 30 jours calendaires. Les ratios d'ETF sont des ratios de prix, "
+            "pas des spreads de rendement ; les spreads OAS sont des séries FRED distinctes."
         )
 
     with st.expander("Quelles sont les limites importantes ?"):
@@ -665,7 +689,7 @@ def render_faq_page() -> None:
         st.markdown(
             """
             La section `Audit sources` en bas du radar liste les fournisseurs effectivement utilisés,
-            le nombre de métriques chargées, la dernière date disponible et le risque maximum observé.
+            le nombre de métriques attendues et utilisables, ainsi que les dates d'observation.
 
             C'est le bon endroit pour vérifier rapidement si le score repose sur toutes les familles
             attendues ou si une source optionnelle manque.
@@ -726,16 +750,14 @@ metrics = combine_metrics(
 )
 buckets = bucket_scores(metrics)
 gscore = current_stress_score(buckets)
-latest_export_issue = write_latest_json(build_latest_payload(metrics, buckets, issues))
-if latest_export_issue:
-    issues.append(latest_export_issue)
+coverage = score_coverage(buckets, expected_buckets=CURRENT_STRESS_BUCKETS)
 
 cbo_score = buckets.loc[buckets["bucket"] == "cbo_projection", "score"]
 fiscal_score = buckets.loc[buckets["bucket"] == "fiscal", "score"]
 fiscal_value = float(fiscal_score.iloc[0]) if len(fiscal_score) else np.nan
-market_score = buckets.loc[buckets["bucket"].isin(["market_prices", "rates_market"]), "score"]
-market_value = float(market_score.iloc[0]) if len(market_score) else np.nan
-private_score = buckets.loc[buckets["bucket"].isin(["global_credit", "private_leverage"]), "score"]
+market_score = buckets[buckets["bucket"].isin(["market_prices", "rates_market"])]
+market_value = float(np.average(market_score["score"], weights=market_score["weight"])) if len(market_score) == 2 and (market_score["coverage"] == 1).all() else np.nan
+private_score = buckets.loc[buckets["bucket"] == "global_credit", "score"]
 private_value = float(private_score.iloc[0]) if len(private_score) else np.nan
 cbo_value = float(cbo_score.iloc[0]) if len(cbo_score) else np.nan
 st.markdown(
@@ -751,6 +773,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.caption(f"Couverture des signaux courants : {coverage:.1%}. Les dates affichées sont les périodes d'observation.")
+unavailable = metrics[~metrics["eligible"]]
+if not unavailable.empty or issues:
+    st.warning("Qualité des données dégradée. Les signaux indisponibles ne contribuent pas au score ; le score courant est suspendu si sa couverture est incomplète.")
+    with st.expander("Signaux à vérifier", expanded=False):
+        for _, row in unavailable.iterrows():
+            observed_date = row["date"].strftime("%Y-%m-%d") if pd.notna(row["date"]) else "N/D"
+            st.write(f"{row['name']} : {QUALITY_LABELS[row['quality']]} ; observation : {observed_date}.")
+
 st.markdown(
     """
     <div class="help-card">
@@ -758,6 +789,7 @@ st.markdown(
       de credit gap, de cout des interets, de liquidite et de marche. Les projections CBO long terme
       sont affichees comme risque structurel, mais exclues du score courant parce qu'elles ne mesurent
       pas un choc de marche actuel. 50 marque une zone elevee, 65 une surveillance active, 80 un stress.
+      Une couverture incomplete suspend le score global ; N/D ne signifie jamais un risque nul.
     </div>
     """,
     unsafe_allow_html=True,
@@ -765,8 +797,8 @@ st.markdown(
 
 if issues:
     with st.expander(
-        f"Data issues and skipped feeds ({len(issues)})",
-        expanded=not fred_key_available() or not massive_key_available(),
+        f"Disponibilité des sources ({len(issues)})",
+        expanded=False,
     ):
         for issue in issues:
             st.write(f"{issue.source}: {issue.detail}")
@@ -783,21 +815,23 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if metrics.empty:
-    st.warning("No data loaded yet. Check network access and API keys.")
+if not metrics["eligible"].any():
+    st.warning("Aucun signal utilisable. En attente d'une collecte valide.")
+    render_site_footer()
     st.stop()
 
 bucket_view = buckets.copy()
 bucket_view["role"] = np.where(bucket_view["bucket"].isin(STRUCTURAL_BUCKETS), "structurel", "courant")
 bucket_view["bucket_label"] = bucket_view["bucket"].map(BUCKET_LABELS).fillna(bucket_view["bucket"])
 bucket_view.loc[bucket_view["role"] == "structurel", "bucket_label"] += " (structurel)"
+bucket_view["bucket_label"] += " (" + bucket_view["n"].astype(str) + "/" + bucket_view["expected"].astype(str) + ")"
 fig_bucket = go.Figure(
     go.Bar(
         x=round(bucket_view["score"], 1),
         y=bucket_view["bucket_label"],
         orientation="h",
         marker=dict(color=[score_color(v) for v in bucket_view["score"]]),
-        text=[f"{v:.1f}" for v in bucket_view["score"]],
+        text=[f"{v:.1f}" if pd.notna(v) else "N/D" for v in bucket_view["score"]],
         textposition="outside",
     )
 )
@@ -820,14 +854,14 @@ table["role_order"] = np.where(table["role"] == "structurel", 1, 0)
 table = table.sort_values(["role_order", "risk_score"], ascending=[True, False])
 table["famille"] = table["bucket"].map(BUCKET_LABELS).fillna(table["bucket"])
 table.loc[table["role"] == "structurel", "famille"] += " (structurel)"
-table["date"] = table["date"].dt.strftime("%Y-%m-%d")
+table["date"] = table["date"].dt.strftime("%Y-%m-%d").fillna("N/D")
 st.markdown(risk_table_html(table), unsafe_allow_html=True)
 with st.expander("Lire les signaux et les sources", expanded=False):
     for _, row in table.head(12).iterrows():
         st.markdown(
             f"""
             <div class="detail-item">
-              <strong>{html.escape(str(row['name']))}</strong> · score {row['risk_score']:.0f}<br>
+              <strong>{html.escape(str(row['name']))}</strong> · score {format_number(row['risk_score'])}<br>
               {html.escape(str(row['rationale']))}
               <div class="detail-meta">{html.escape(str(row['source']))} · {html.escape(str(row['series_id']))} · {html.escape(str(row['date']))}</div>
             </div>
@@ -917,7 +951,7 @@ fig_market.update_yaxes(title_text="Yield / spread", secondary_y=True)
 if plotted:
     st.plotly_chart(fig_market, width="stretch")
 else:
-    st.info("Add FRED_API_KEY and/or MASSIVE_API_KEY to unlock market charts.")
+    st.info("Données de marché indisponibles.")
 
 st.markdown("## Projections institutionnelles")
 st.markdown(
@@ -978,6 +1012,7 @@ st.markdown(
 )
 
 default_debt = 120.0
+st.caption("Scénario hypothétique : les paramètres sont des hypothèses, pas des prévisions institutionnelles.")
 if "GFDEGDQ188S" in fred_data:
     default_debt = float(fred_data["GFDEGDQ188S"].dropna().iloc[-1])
 
@@ -1029,7 +1064,7 @@ st.markdown(
     <div class="help-card">
       <strong>Lecture des sources.</strong> Les donnees institutionnelles viennent de Treasury Fiscal Data,
       BIS, CBO, World Bank et FRED. Les prix et ratios de marche passent par Massive quand la cle
-      est presente. Les flux absents sont signales plus haut et exclus du score sans bloquer le reste du radar.
+      est presente. Les flux absents sont signales plus haut. Une couverture courante incomplete suspend le score global.
     </div>
     """,
     unsafe_allow_html=True,
@@ -1038,21 +1073,21 @@ st.markdown(
 st.markdown("## Audit sources")
 audit = (
     metrics.groupby("source")
-    .agg(metrics=("series_id", "count"), latest_date=("date", "max"), max_risk=("risk_score", "max"))
+    .agg(metrics=("eligible", "sum"), expected=("series_id", "count"), oldest_date=("date", "min"), latest_date=("date", "max"))
     .reset_index()
     .sort_values("metrics", ascending=False)
 )
-audit["latest_date"] = audit["latest_date"].dt.strftime("%Y-%m-%d")
-st.dataframe(
-    audit,
-    width="stretch",
-    hide_index=True,
-    column_config={
-        "source": st.column_config.TextColumn("source", width="medium"),
-        "metrics": st.column_config.NumberColumn("series", width="small"),
-        "latest_date": st.column_config.TextColumn("derniere date", width="small"),
-        "max_risk": st.column_config.ProgressColumn("risque max", min_value=0, max_value=100, format="%.0f", width="small"),
-    },
-)
+audit["latest_date"] = audit["latest_date"].dt.strftime("%Y-%m-%d").fillna("N/D")
+audit["oldest_date"] = audit["oldest_date"].dt.strftime("%Y-%m-%d").fillna("N/D")
+audit.loc[audit["source"] == "CBO Open Data", ["oldest_date", "latest_date"]] = "Projection (févr. 2026)"
+for _, row in audit.iterrows():
+    st.markdown(
+        '<div class="detail-item">'
+        f'<strong>{html.escape(str(row["source"]))}</strong> · {row["metrics"]}/{row["expected"]} signaux utilisables'
+        '<div class="detail-meta">'
+        f'Observations : {html.escape(str(row["oldest_date"]))} à {html.escape(str(row["latest_date"]))}'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
 
 render_site_footer()

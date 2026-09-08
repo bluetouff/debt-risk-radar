@@ -355,7 +355,6 @@ CURRENT_STRESS_BUCKETS = tuple(
     bucket for bucket in BUCKET_WEIGHTS
     if bucket not in STRUCTURAL_BUCKETS
 )
-NEUTRAL_RISK_SCORE = 50.0
 
 
 WATCH_LEVEL = 65

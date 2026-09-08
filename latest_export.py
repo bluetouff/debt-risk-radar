@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS
+from quality import assess_metrics
 
 if Path(sys.argv[0]).name == "latest_export.py":
     os.environ.setdefault("DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE", "1")
@@ -99,6 +100,12 @@ def metric_record(row: pd.Series) -> dict:
         "risk_score": json_value(float(row["risk_score"])) if pd.notna(row["risk_score"]) else None,
         "source": str(row["source"]),
         "rationale": str(row["rationale"]),
+        "quality": str(row.get("quality", "unknown")),
+        "quality_detail": str(row.get("quality_detail", "")),
+        "eligible": bool(row.get("eligible", False)),
+        "frequency": str(row.get("frequency", "unknown")),
+        "observation_age_days": json_value(row.get("observation_age_days")),
+        "max_age_days": json_value(row.get("max_age_days")),
     }
 
 
@@ -129,24 +136,24 @@ def load_metric_snapshot(
 
 def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue]) -> dict:
     generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+    metrics = assess_metrics(metrics, now=generated_at)
+    buckets = bucket_scores(metrics)
     overall = current_stress_score(buckets)
     current_coverage = score_coverage(buckets, expected_buckets=CURRENT_STRESS_BUCKETS)
     structural_buckets = buckets[buckets["bucket"].isin(STRUCTURAL_BUCKETS)] if not buckets.empty else pd.DataFrame()
     source_rows = []
     if not metrics.empty:
-        source_audit = (
-            metrics.groupby("source")
-            .agg(metrics=("series_id", "count"), latest_date=("date", "max"), max_risk=("risk_score", "max"))
-            .reset_index()
-            .sort_values("metrics", ascending=False)
-        )
-        for _, row in source_audit.iterrows():
+        for source, sub in metrics.groupby("source"):
+            observed = sub[sub["frequency"] != "projection"]
             source_rows.append(
                 {
-                    "source": str(row["source"]),
-                    "metrics": int(row["metrics"]),
-                    "latest_date": json_date(row["latest_date"]),
-                    "max_risk": json_value(float(row["max_risk"])) if pd.notna(row["max_risk"]) else None,
+                    "source": str(source),
+                    "metrics": int(sub["eligible"].sum()),
+                    "expected_metrics": len(sub),
+                    "latest_date": json_date(observed["date"].max()),
+                    "oldest_date": json_date(observed["date"].min()),
+                    "projection_horizon": json_date(sub.loc[sub["frequency"] == "projection", "date"].max()),
+                    "max_risk": json_value(sub["risk_score"].max()),
                 }
             )
 
@@ -162,14 +169,16 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                     "status": score_label(score),
                     "weight": json_value(float(row["weight"])) if pd.notna(row["weight"]) else None,
                     "metrics": int(row["n"]),
+                    "expected_metrics": int(row["expected"]),
+                    "coverage": json_value(row["coverage"]),
                     "score_role": "structural" if str(row["bucket"]) in STRUCTURAL_BUCKETS else "current_stress",
-                    "included_in_overall": str(row["bucket"]) not in STRUCTURAL_BUCKETS,
+                    "included_in_overall": str(row["bucket"]) not in STRUCTURAL_BUCKETS and pd.notna(overall),
                 }
             )
 
     top_rows = []
     if not metrics.empty:
-        current_metrics = metrics[~metrics["bucket"].isin(STRUCTURAL_BUCKETS)]
+        current_metrics = metrics[~metrics["bucket"].isin(STRUCTURAL_BUCKETS) & metrics["eligible"]]
         top_metrics = current_metrics.sort_values("risk_score", ascending=False).head(LATEST_JSON_TOP_SIGNALS)
         top_rows = [metric_record(row) for _, row in top_metrics.iterrows()]
 
@@ -189,10 +198,11 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
             )
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "name": "Debt Risk Radar",
         "description": "Machine-readable snapshot of the public US debt risk dashboard.",
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "valid_until": (generated_at + pd.Timedelta(seconds=2 * AUTO_REFRESH_SECONDS)).isoformat().replace("+00:00", "Z"),
         "public_url": "https://debt.l0g.fr/",
         "latest_json_url": "https://debt.l0g.fr/latest.json",
         "scope": {
@@ -216,12 +226,20 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
             "status": score_label(overall),
             "methodology": "Current stress score excludes structural long-term CBO projections.",
             "coverage": json_value(current_coverage),
-            "coverage_note": "Missing current-stress buckets are imputed at neutral 50 before weighting.",
+            "coverage_note": "Weighted coverage of eligible expected signals. Current stress is unavailable unless coverage is complete; no neutral imputation.",
             "excluded_buckets": sorted(STRUCTURAL_BUCKETS),
             "buckets": bucket_rows,
             "structural": structural_rows,
         },
         "top_signals": top_rows,
+        "signals": [metric_record(row) for _, row in metrics.iterrows()],
+        "quality": {
+            "status": "degraded" if issues or not metrics["eligible"].all() else "ok",
+            "expected_signals": len(metrics),
+            "eligible_signals": int(metrics["eligible"].sum()),
+            "unavailable_signals": metrics.loc[~metrics["eligible"], "series_id"].tolist(),
+            "note": "Observation-age tolerances allow publication delays; they do not certify that every provider has published no newer data. CBO February 2026 vintage is pinned.",
+        },
         "sources": source_rows,
         "issues": [{"source": issue.source, "detail": issue.detail} for issue in issues],
     }
@@ -277,11 +295,14 @@ def main() -> int:
                 "top_signals": len(payload["top_signals"]),
                 "sources": len(payload["sources"]),
                 "issues": len(payload["issues"]),
+                "quality": payload["quality"]["status"],
+                "coverage": payload["score"]["coverage"],
+                "eligible_signals": payload["quality"]["eligible_signals"],
             },
             sort_keys=True,
         )
     )
-    return 0
+    return 0 if payload["score"]["current_stress"] is not None else 2
 
 
 if __name__ == "__main__":

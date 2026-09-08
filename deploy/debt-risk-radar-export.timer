@@ -5,6 +5,7 @@ Description=Refresh Debt Risk Radar latest.json
 OnBootSec=2min
 OnUnitActiveSec=15min
 AccuracySec=1min
+RandomizedDelaySec=30s
 Persistent=true
 Unit=debt-risk-radar-export.service
 
