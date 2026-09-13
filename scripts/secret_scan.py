@@ -46,7 +46,8 @@ TEXT_EXTENSIONS = {
     ".yml",
 }
 
-SECRET_PATTERNS = [
+# Public detection metadata, never credential values read from scanned files.
+DETECTION_RULES = [
     ("private key", re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----")),
     ("OpenAI key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")),
@@ -146,7 +147,7 @@ def scan_path(path: Path) -> list[str]:
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        for label, pattern in SECRET_PATTERNS:
+        for label, pattern in DETECTION_RULES:
             if pattern.search(line):
                 findings.append(f"{relative}:{line_number}: possible {label}")
         for match in CREDENTIAL_ASSIGNMENT.finditer(line):
