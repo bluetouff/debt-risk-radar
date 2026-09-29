@@ -29,6 +29,7 @@ FAILURE_COOLDOWN = 15 * 60
 AUTH_COOLDOWN = 6 * 3600
 MAX_RATE_LIMIT_COOLDOWN = 6 * 3600
 MASSIVE_REQUEST_INTERVAL = 65.0
+CACHE_REFRESH_WINDOW = 30 * 60
 
 
 def read_only() -> bool:
@@ -89,7 +90,10 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
                 db.execute("BEGIN IMMEDIATE")
             now = time.time()
             cached = db.execute("SELECT fetched, body FROM responses WHERE key=?", (key,)).fetchone()
-            if cached and 0 <= now - cached[0] < ttl:
+            fresh = cached is not None and 0 <= now - cached[0] < ttl
+            # Renew before the next timer tick without extending the readers' TTL.
+            refresh_age = ttl - min(CACHE_REFRESH_WINDOW, ttl / 10)
+            if fresh and (read_only() or now - cached[0] < refresh_age):
                 return bytes(cached[1])
             if read_only():
                 raise DataUnavailable("Source cache missing or expired; awaiting scheduled collection.")
@@ -97,6 +101,8 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
             host = parts.hostname
             state = db.execute("SELECT last_request, blocked_until FROM providers WHERE host=?", (host,)).fetchone()
             if state and state[1] > now:
+                if fresh:
+                    return bytes(cached[1])
                 raise DataUnavailable("Provider temporarily paused after an upstream failure or rate limit.")
             interval = MASSIVE_REQUEST_INTERVAL if host == "api.massive.com" else 1.0
             if state:

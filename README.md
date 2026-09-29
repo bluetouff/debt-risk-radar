@@ -80,7 +80,9 @@ incomplete : aucune valeur manquante n'est remplacee par 50. Un consommateur doi
 verifier `valid_until`, `quality` et `score.coverage` avant d'utiliser le score.
 
 Les requetes sont mises en cache sur disque pendant six heures pour Treasury/FRED/Massive,
-et vingt-quatre heures pour BIS/CBO/World Bank. Les redemarrages du collecteur ne vident
+et vingt-quatre heures pour BIS/CBO/World Bank. Le collecteur commence leur renouvellement
+dans les trente dernieres minutes de validite pour eviter un trou entre deux passages ;
+cette anticipation ne prolonge jamais leur TTL. Les redemarrages du collecteur ne vident
 pas ce cache. En production, l'application publique lit uniquement le cache ; les visites
 ne declenchent aucun appel aux fournisseurs. Les echecs et quotas declenchent une pause
 persistante par fournisseur, sans retry immediat. Voir `DEPLOYMENT.md` pour les services.

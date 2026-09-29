@@ -648,8 +648,9 @@ def render_faq_page() -> None:
         st.markdown(
             f"""
             L'app se rafraîchit automatiquement toutes les `{AUTO_REFRESH_SECONDS // 60}` minutes.
-            Les observations sont collectées au plus toutes les six heures pour Treasury, FRED et
-            Massive, et toutes les vingt-quatre heures pour BIS, CBO et World Bank.
+            Le cache est valide six heures pour Treasury, FRED et Massive, et vingt-quatre heures
+            pour BIS, CBO et World Bank. Le collecteur commence son renouvellement jusqu'à trente
+            minutes avant l'expiration afin d'éviter des interruptions entre deux passages.
             Une visite ou un rafraîchissement de la page publique ne lance aucune collecte.
 
             Attention : beaucoup de séries publiques sont trimestrielles, annuelles ou publiées avec délai.

@@ -95,6 +95,52 @@ class CacheTests(unittest.TestCase):
                 http_cache.get_bytes(self.url, ttl=60)
         self.assertEqual(self.get.call_count, 1)
 
+    def test_collector_renews_before_expiry_without_shortening_reader_ttl(self):
+        clock = FakeClock()
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            for ttl in [6 * 3600, 24 * 3600]:
+                params = {"series_id": str(ttl)}
+                http_cache.get_bytes(self.url, params=params, ttl=ttl)
+                calls = self.get.call_count
+                clock.now += ttl - 1801
+                http_cache.get_bytes(self.url, params=params, ttl=ttl)
+                self.assertEqual(self.get.call_count, calls)
+                clock.now += 1
+                with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+                    self.assertEqual(http_cache.get_json(self.url, params=params, ttl=ttl), {"ok": True})
+                self.assertEqual(self.get.call_count, calls)
+                http_cache.get_bytes(self.url, params=params, ttl=ttl)
+                self.assertEqual(self.get.call_count, calls + 1)
+                with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                    latest = db.execute("SELECT MAX(fetched) FROM responses").fetchone()[0]
+                self.assertEqual(latest, clock.now)
+
+    def test_failed_early_renewal_preserves_valid_cache_but_never_extends_it(self):
+        clock = FakeClock()
+        ttl = 6 * 3600
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            http_cache.get_bytes(self.url, ttl=ttl)
+            fetched = clock.now
+            clock.now += ttl - 1800
+            self.get.return_value = response(status=429, headers={"Retry-After": "3600"})
+            with self.assertRaisesRegex(http_cache.DataUnavailable, "HTTP 429"):
+                http_cache.get_bytes(self.url, ttl=ttl)
+            self.assertEqual(http_cache.get_json(self.url, ttl=ttl), {"ok": True})
+            with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+                self.assertEqual(http_cache.get_json(self.url, ttl=ttl), {"ok": True})
+            with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                self.assertEqual(db.execute("SELECT fetched FROM responses").fetchone()[0], fetched)
+                self.assertEqual(db.execute("SELECT failures FROM rate_limits").fetchone()[0], 1)
+            clock.now = fetched + ttl
+            with self.assertRaises(http_cache.DataUnavailable):
+                http_cache.get_bytes(self.url, ttl=ttl)
+            with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+                with self.assertRaises(http_cache.DataUnavailable):
+                    http_cache.get_bytes(self.url, ttl=ttl)
+            self.assertEqual(self.get.call_count, 2)
+
     def test_rate_limit_stops_other_series_and_persists_retry_after(self):
         self.get.return_value = response(status=429, headers={"Retry-After": "3600"})
         for series in ["TEST_A", "TEST_B"]:

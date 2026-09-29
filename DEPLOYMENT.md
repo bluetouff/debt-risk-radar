@@ -136,7 +136,9 @@ sudo systemctl restart debt-risk-radar
 - Verifier `quality`, `score.coverage`, `signals` et `valid_until` dans `latest.json` apres la premiere collecte.
 - Le schema 1.1 suspend `score.current_stress` (`null`) si un signal courant manque ; aucune imputation a 50.
 - Le cache persiste entre les executions : six heures pour Treasury/FRED/Massive, un jour pour BIS/CBO/World Bank.
-- Un second export dans le TTL ne doit declencher aucun appel fournisseur.
+- Un second export ne doit declencher aucun appel fournisseur tant que le cache
+  n'est pas dans les trente dernieres minutes de son TTL. Le renouvellement anticipe
+  ne modifie pas la date d'observation et ne prolonge pas la validite d'une reponse.
 - Les requetes Massive sont espacees de 65 secondes ; cinq reponses non cachees
   peuvent donc demander plus de quatre minutes. Le delai systemd de dix minutes
   couvre cette collecte espacee. Ne pas vider le cache ou lancer des collectes
