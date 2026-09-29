@@ -27,6 +27,8 @@ ALLOWED_HOSTS = frozenset({
 MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 FAILURE_COOLDOWN = 15 * 60
 AUTH_COOLDOWN = 6 * 3600
+MAX_RATE_LIMIT_COOLDOWN = 6 * 3600
+MASSIVE_REQUEST_INTERVAL = 65.0
 
 
 def read_only() -> bool:
@@ -48,6 +50,8 @@ def _connect() -> sqlite3.Connection:
     os.chmod(path, 0o600)
     db.execute("CREATE TABLE IF NOT EXISTS responses (key TEXT PRIMARY KEY, fetched REAL, body BLOB)")
     db.execute("CREATE TABLE IF NOT EXISTS providers (host TEXT PRIMARY KEY, last_request REAL, blocked_until REAL)")
+    # Keep the existing tables compatible with older collectors during rollback.
+    db.execute("CREATE TABLE IF NOT EXISTS rate_limits (host TEXT PRIMARY KEY, failures INTEGER NOT NULL)")
     db.commit()
     return db
 
@@ -94,10 +98,9 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
             state = db.execute("SELECT last_request, blocked_until FROM providers WHERE host=?", (host,)).fetchone()
             if state and state[1] > now:
                 raise DataUnavailable("Provider temporarily paused after an upstream failure or rate limit.")
-            interval = 13.0 if host == "api.massive.com" else 1.0
+            interval = MASSIVE_REQUEST_INTERVAL if host == "api.massive.com" else 1.0
             if state:
                 time.sleep(max(0, min(interval, state[0] + interval - now)))
-            now = time.time()
             error = None
             body = None
             blocked_until = 0.0
@@ -107,8 +110,14 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
                     if response.status_code != 200:
                         cooldown = AUTH_COOLDOWN if response.status_code in (401, 403) else FAILURE_COOLDOWN
                         if response.status_code == 429:
-                            cooldown = _retry_after(response.headers.get("Retry-After"), time.time())
+                            prior = db.execute("SELECT failures FROM rate_limits WHERE host=?", (host,)).fetchone()
+                            failures = min(6, max(0, prior[0] if prior else 0) + 1)
+                            backoff = min(MAX_RATE_LIMIT_COOLDOWN, FAILURE_COOLDOWN * 2 ** (failures - 1))
+                            cooldown = max(backoff, _retry_after(response.headers.get("Retry-After"), time.time()))
+                            db.execute("INSERT OR REPLACE INTO rate_limits (host, failures) VALUES (?, ?)", (host, failures))
                         blocked_until = time.time() + cooldown
+                        if response.status_code == 429:
+                            raise DataUnavailable(f"HTTP 429; provider requests paused for at least {cooldown / 60:g} minutes.")
                         raise DataUnavailable(f"HTTP {response.status_code}; provider requests paused.")
                     chunks = []
                     size = 0
@@ -128,8 +137,9 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
             except (requests.RequestException, DataUnavailable) as exc:
                 error = str(exc) if isinstance(exc, DataUnavailable) else "Upstream request failed; provider requests paused."
                 blocked_until = max(blocked_until, time.time() + FAILURE_COOLDOWN)
-            db.execute("INSERT OR REPLACE INTO providers VALUES (?, ?, ?)", (host, now, blocked_until))
+            db.execute("INSERT OR REPLACE INTO providers VALUES (?, ?, ?)", (host, time.time(), blocked_until))
             if error is None:
+                db.execute("DELETE FROM rate_limits WHERE host=?", (host,))
                 db.execute("INSERT OR REPLACE INTO responses VALUES (?, ?, ?)", (key, time.time(), body))
             db.commit()
             if error:

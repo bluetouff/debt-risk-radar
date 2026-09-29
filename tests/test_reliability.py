@@ -32,6 +32,14 @@ def response(body=b'{"ok": true}', status=200, headers=None):
     return result
 
 
+class FakeClock:
+    def __init__(self):
+        self.now = 1_800_000_000.0
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 def complete_metrics(now="2026-09-08"):
     """Explicit synthetic test inputs, never used by runtime or public exports."""
     rows = []
@@ -101,11 +109,133 @@ class CacheTests(unittest.TestCase):
         now = datetime(2026, 9, 8, 12, tzinfo=timezone.utc).timestamp()
         self.assertEqual(http_cache._retry_after("Tue, 08 Sep 2026 14:00:00 GMT", now), 7200)
 
+    def test_invalid_or_short_retry_after_keeps_minimum_pause(self):
+        for value in [None, "invalid", "nan", "inf", "-60", "0", "30",
+                      "Tue, 08 Sep 2026 14:00:00 GMT"]:
+            self.assertEqual(http_cache._retry_after(value, 1_800_000_000), 900)
+
     def test_massive_calls_are_spaced_even_for_distinct_tickers(self):
-        with patch("http_cache.time.sleep") as sleep:
-            for ticker in ["AAA", "BBB"]:
+        clock = FakeClock()
+        starts, finishes = [], []
+
+        def fetch(*args, **kwargs):
+            starts.append(clock.now)
+            clock.now += 3
+            finishes.append(clock.now)
+            return response()
+
+        self.get.side_effect = fetch
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            for ticker in ["AAA", "BBB", "CCC", "DDD", "EEE"]:
                 http_cache.get_bytes(f"https://api.massive.com/v2/{ticker}", ttl=60)
-        self.assertGreater(sleep.call_args.args[0], 12)
+        self.assertEqual(len(starts), 5)
+        self.assertTrue(all(start - finish >= 65 for start, finish in zip(starts[1:], finishes)))
+
+    def test_repeated_rate_limits_back_off_persistently_and_do_not_retry_early(self):
+        clock = FakeClock()
+        self.get.return_value = response(status=429)
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            for attempt, cooldown in enumerate([900, 1800, 3600, 7200, 14400, 21600, 21600], 1):
+                with self.assertRaisesRegex(http_cache.DataUnavailable, "HTTP 429"):
+                    http_cache.get_bytes(self.url, ttl=60)
+                with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                    blocked = db.execute("SELECT blocked_until FROM providers").fetchone()[0]
+                    failures = db.execute("SELECT failures FROM rate_limits").fetchone()[0]
+                self.assertEqual(blocked, clock.now + cooldown)
+                self.assertEqual(failures, min(attempt, 6))
+                clock.now = blocked - 1
+                with self.assertRaises(http_cache.DataUnavailable):
+                    http_cache.get_bytes(self.url, params={"series_id": "OTHER"}, ttl=60)
+                self.assertEqual(self.get.call_count, attempt)
+                clock.now = blocked + 1
+
+    def test_read_only_visitors_can_read_cache_while_collector_waits(self):
+        clock = FakeClock()
+        cached_url = "https://api.massive.com/v2/AAA"
+        reads = []
+
+        def wait(seconds):
+            with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+                reads.append(http_cache.get_json(cached_url, ttl=3600))
+            clock.sleep(seconds)
+
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=wait):
+            http_cache.get_bytes(cached_url, ttl=3600)
+            http_cache.get_bytes("https://api.massive.com/v2/BBB", ttl=3600)
+        self.assertEqual(reads, [{"ok": True}])
+        self.assertEqual(self.get.call_count, 2)
+
+    def test_rate_limit_retry_after_can_exceed_backoff_cap(self):
+        clock = FakeClock()
+        self.get.return_value = response(status=429, headers={"Retry-After": "86400"})
+        with patch("http_cache.time.time", side_effect=lambda: clock.now):
+            with self.assertRaises(http_cache.DataUnavailable):
+                http_cache.get_bytes(self.url, ttl=60)
+        with closing(sqlite3.connect(http_cache.cache_path())) as db:
+            blocked = db.execute("SELECT blocked_until FROM providers").fetchone()[0]
+        self.assertEqual(blocked, clock.now + 86400)
+
+    def test_only_successful_new_response_resets_rate_limit_streak(self):
+        clock = FakeClock()
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            http_cache.get_bytes(self.url, params={"series_id": "CACHED"}, ttl=86400)
+            self.get.return_value = response(status=429)
+            with self.assertRaises(http_cache.DataUnavailable):
+                http_cache.get_bytes(self.url, params={"series_id": "MISSING"}, ttl=60)
+            http_cache.get_bytes(self.url, params={"series_id": "CACHED"}, ttl=86400)
+            self.assertEqual(self.get.call_count, 2)
+            with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                self.assertEqual(db.execute("SELECT failures FROM rate_limits").fetchone()[0], 1)
+                clock.now = db.execute("SELECT blocked_until FROM providers").fetchone()[0] + 1
+            self.get.return_value = response()
+            http_cache.get_bytes(self.url, params={"series_id": "MISSING"}, ttl=60)
+            with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                self.assertIsNone(db.execute("SELECT failures FROM rate_limits").fetchone())
+            self.get.return_value = response(status=429)
+            with self.assertRaises(http_cache.DataUnavailable):
+                http_cache.get_bytes(self.url, params={"series_id": "OTHER"}, ttl=60)
+            with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                self.assertEqual(db.execute("SELECT blocked_until FROM providers").fetchone()[0], clock.now + 900)
+
+    def test_rate_limit_never_returns_expired_cached_data(self):
+        clock = FakeClock()
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            http_cache.get_bytes(self.url, ttl=60)
+            clock.now += 61
+            self.get.return_value = response(status=429)
+            with self.assertRaisesRegex(http_cache.DataUnavailable, "HTTP 429"):
+                http_cache.get_bytes(self.url, ttl=60)
+            with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+                with self.assertRaisesRegex(http_cache.DataUnavailable, "expired"):
+                    http_cache.get_bytes(self.url, ttl=60)
+            self.assertEqual(self.get.call_count, 2)
+
+    def test_old_cache_schema_is_preserved_and_migrated_without_network(self):
+        path = http_cache.cache_path()
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("CREATE TABLE responses (key TEXT PRIMARY KEY, fetched REAL, body BLOB)")
+            db.execute("CREATE TABLE providers (host TEXT PRIMARY KEY, last_request REAL, blocked_until REAL)")
+            db.execute("INSERT INTO providers VALUES (?, ?, ?)",
+                       ("api.stlouisfed.org", time.time(), time.time() + 3600))
+        with self.assertRaises(http_cache.DataUnavailable):
+            http_cache.get_bytes(self.url, ttl=60)
+        self.get.assert_not_called()
+        with closing(sqlite3.connect(path)) as db:
+            self.assertEqual(len(db.execute("PRAGMA table_info(providers)").fetchall()), 3)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM rate_limits").fetchone()[0], 0)
+
+    def test_read_only_legacy_cache_needs_no_schema_migration(self):
+        http_cache.get_bytes(self.url, ttl=60)
+        with closing(sqlite3.connect(http_cache.cache_path())) as db, db:
+            db.execute("DROP TABLE rate_limits")
+        with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+            self.assertEqual(http_cache.get_json(self.url, ttl=60), {"ok": True})
+        self.get.assert_called_once()
 
     def test_rejects_untrusted_hosts_and_redirects_without_following(self):
         for url in ["http://api.massive.com/v2", "https://api.massive.com.evil.invalid/v2",
@@ -167,6 +297,58 @@ class QualityTests(unittest.TestCase):
             series, issues = data.fetch_massive_market()
             self.assertEqual(series, {})
             self.assertEqual(len(issues), 1)
+
+    def test_massive_quota_incident_suspends_score_and_recovers_only_after_pause(self):
+        clock = FakeClock()
+        clock.now = time.time()
+        end = pd.Timestamp.now(tz="America/New_York").normalize() - pd.offsets.BDay(1)
+        dates = pd.bdate_range(end=end, periods=80)
+        # Synthetic provider responses exercise the same two missing tickers as the incident.
+        payloads = {}
+        for index, ticker in enumerate(data.MASSIVE_MARKET_SERIES):
+            payloads[ticker] = json.dumps({"results": [
+                {"t": int(date.timestamp() * 1000),
+                 "c": 70 + index * 10 + day * (index + 1) / 10 + np.sin(day / 3)}
+                for day, date in enumerate(dates)
+            ]}).encode()
+        limited = True
+        calls = []
+
+        def fetch(url, **kwargs):
+            ticker = next(t for t in payloads if f"/ticker/{t}/" in url)
+            calls.append(ticker)
+            return response(status=429) if limited and ticker == "SHY" else response(payloads[ticker])
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(os.environ, {"DEBT_RISK_RADAR_CACHE_DIR": directory, "DEBT_RISK_RADAR_READ_ONLY": "0"}), \
+                patch("data.massive_key_available", return_value=True), \
+                patch("data._streamlit_secret", return_value=None), \
+                patch("http_cache.requests.get", side_effect=fetch), \
+                patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            series, issues = data.fetch_massive_market()
+            self.assertEqual(set(series), {"TLT", "HYG", "LQD"})
+            self.assertEqual(calls, ["TLT", "HYG", "LQD", "SHY"])
+            nonmarket = complete_metrics(end.date().isoformat()).query("bucket != 'market_prices'")
+            metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
+            degraded = build_latest_payload(metrics, pd.DataFrame(), issues)
+            missing = {row["series_id"] for row in degraded["signals"] if not row["eligible"]}
+            self.assertEqual(missing, {"SHY", "SPY", "TLT/SHY", "SPY/TLT"})
+            self.assertIsNone(degraded["score"]["current_stress"])
+            data.fetch_massive_market()
+            self.assertEqual(len(calls), 4)
+            with closing(sqlite3.connect(http_cache.cache_path())) as db:
+                clock.now = db.execute("SELECT blocked_until FROM providers WHERE host='api.massive.com'").fetchone()[0] + 1
+            limited = False
+            series, issues = data.fetch_massive_market()
+            self.assertEqual(calls, ["TLT", "HYG", "LQD", "SHY", "SHY", "SPY"])
+            self.assertEqual(issues, [])
+            metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
+            recovered = build_latest_payload(metrics, pd.DataFrame(), issues)
+            self.assertEqual(recovered["quality"]["status"], "ok")
+            self.assertEqual(recovered["quality"]["eligible_signals"], 44)
+            self.assertEqual(recovered["score"]["coverage"], 1)
+            self.assertIsNotNone(recovered["score"]["current_stress"])
 
     def test_missing_single_signal_reduces_coverage_and_suspends_overall(self):
         raw = complete_metrics()

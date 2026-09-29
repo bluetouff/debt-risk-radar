@@ -44,10 +44,13 @@ Les lectures sortantes passent par `http_cache.py` : allowlist HTTPS, pas de red
 delais et tailles limites, cache SQLite prive sans cle API ni en-tete d'autorisation.
 Les echecs ne contournent jamais le cache. Les reponses expirees ne sont pas reutilisees
 comme donnees courantes. Les codes 429 suspendent le fournisseur selon `Retry-After`
-(au moins 15 minutes), les erreurs 401/403 pendant six heures, les autres echecs
+(au moins 15 minutes). Les 429 consecutifs doublent la pause jusqu'a six heures,
+avec un compteur persistant ; un `Retry-After` plus long reste prioritaire. Seule
+une nouvelle reponse acceptee remet ce compteur a zero, pas une lecture du cache.
+Les erreurs 401/403 suspendent les appels pendant six heures, les autres echecs
 pendant 15 minutes. Aucun retry immediat. Les appels Massive sont espaces d'au moins
-13 secondes dans cette application ; les quotas partages avec d'autres applications
-doivent etre coordonnes a l'echelle du compte.
+65 secondes apres la fin de la requete precedente dans cette application ; les
+quotas partages avec d'autres applications doivent etre coordonnes a l'echelle du compte.
 
 Le service public est en lecture seule du cache et ne peut plus ecrire `latest.json`.
 Les restrictions IP systemd limitent ses connexions au loopback. Le collecteur planifie

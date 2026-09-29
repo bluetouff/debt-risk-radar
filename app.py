@@ -636,6 +636,11 @@ def render_faq_page() -> None:
             Un flux absent, en erreur ou trop ancien est signalé dans la couverture. Sa valeur
             ne remplace jamais une observation récente. Le score courant est suspendu tant que
             les signaux attendus ne sont pas tous disponibles.
+
+            Un quota dépassé chez un fournisseur suspend temporairement ses appels. La collecte
+            planifiée reprend après la pause, qui s'allonge si les refus se répètent. Pendant
+            cette attente, les signaux valides restent visibles. Recharger la page ne force
+            aucun appel et ne raccourcit pas la pause.
             """
         )
 

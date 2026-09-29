@@ -84,6 +84,12 @@ et vingt-quatre heures pour BIS/CBO/World Bank. Les redemarrages du collecteur n
 pas ce cache. En production, l'application publique lit uniquement le cache ; les visites
 ne declenchent aucun appel aux fournisseurs. Les echecs et quotas declenchent une pause
 persistante par fournisseur, sans retry immediat. Voir `DEPLOYMENT.md` pour les services.
+Les appels Massive sont espaces de 65 secondes apres la fin de chaque requete,
+soit moins d'un appel par minute pour cette application. Une reponse HTTP 429 impose
+au moins 15 minutes de pause ; des refus consecutifs doublent progressivement cette
+pause jusqu'a six heures, sans jamais raccourcir un `Retry-After` plus long.
+Ce budget local laisse de la marge, mais ne coordonne pas les autres applications
+qui utilisent le meme compte Massive.
 
 ## Structure
 
