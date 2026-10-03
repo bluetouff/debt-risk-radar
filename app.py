@@ -18,6 +18,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, WATCH_LEVEL, STRESS_LEVEL, STRUCTURAL_BUCKETS
+from http_cache import collection_status
 from data import (
     bis_credit_metrics,
     bucket_scores,
@@ -641,6 +642,11 @@ def render_faq_page() -> None:
             planifiée reprend après la pause, qui s'allonge si les refus se répètent. Pendant
             cette attente, les signaux valides restent visibles. Recharger la page ne force
             aucun appel et ne raccourcit pas la pause.
+
+            Si un renouvellement échoue, la dernière réponse reste utilisable jusqu'à son
+            échéance initiale. La pause du fournisseur et l'heure de reprise autorisée sont
+            signalées séparément. À l'expiration, le signal devient indisponible et le score
+            courant est suspendu si sa couverture est incomplète.
             """
         )
 
@@ -780,6 +786,18 @@ st.markdown(
 )
 
 st.caption(f"Couverture des signaux courants : {coverage:.1%}. Les dates affichées sont les périodes d'observation.")
+collection = collection_status()
+if collection["status"] == "paused":
+    st.info("Le renouvellement de certaines sources est temporairement en pause. "
+            "Les réponses encore valides restent utilisables jusqu'à leur échéance initiale.")
+    with st.expander("État du renouvellement", expanded=False):
+        reasons = {"rate_limit": "quota du fournisseur", "authorization": "accès refusé",
+                   "http_error": "erreur du fournisseur", "network_error": "échec de connexion",
+                   "invalid_response": "réponse rejetée", "upstream_failure": "échec du fournisseur"}
+        for provider in collection["providers"]:
+            st.write(f"{provider['source']} : {reasons[provider['reason']]}. "
+                     f"Nouvel essai autorisé à partir de {provider['retry_at']} (UTC), "
+                     "lors d'un passage planifié.")
 unavailable = metrics[~metrics["eligible"]]
 if not unavailable.empty or issues:
     st.warning("Qualité des données dégradée. Les signaux indisponibles ne contribuent pas au score ; le score courant est suspendu si sa couverture est incomplète.")

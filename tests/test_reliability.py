@@ -125,8 +125,7 @@ class CacheTests(unittest.TestCase):
             fetched = clock.now
             clock.now += ttl - 1800
             self.get.return_value = response(status=429, headers={"Retry-After": "3600"})
-            with self.assertRaisesRegex(http_cache.DataUnavailable, "HTTP 429"):
-                http_cache.get_bytes(self.url, ttl=ttl)
+            self.assertEqual(http_cache.get_json(self.url, ttl=ttl), {"ok": True})
             self.assertEqual(http_cache.get_json(self.url, ttl=ttl), {"ok": True})
             with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
                 self.assertEqual(http_cache.get_json(self.url, ttl=ttl), {"ok": True})
@@ -140,6 +139,73 @@ class CacheTests(unittest.TestCase):
                 with self.assertRaises(http_cache.DataUnavailable):
                     http_cache.get_bytes(self.url, ttl=ttl)
             self.assertEqual(self.get.call_count, 2)
+
+    def test_failed_refresh_cannot_return_cache_that_expired_during_request(self):
+        clock = FakeClock()
+        ttl = 6 * 3600
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            http_cache.get_bytes(self.url, ttl=ttl)
+            clock.now += ttl - 1
+
+            def fail_after_expiry(*args, **kwargs):
+                clock.now += 2
+                raise http_cache.requests.Timeout("private upstream details")
+
+            self.get.side_effect = fail_after_expiry
+            with self.assertRaises(http_cache.DataUnavailable):
+                http_cache.get_bytes(self.url, ttl=ttl)
+
+    def test_network_failure_keeps_valid_cache_and_safe_persistent_diagnostics(self):
+        clock = FakeClock()
+        with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            http_cache.get_bytes(self.url, ttl=21600)
+            clock.now += 19800
+            self.get.side_effect = http_cache.requests.Timeout("private-credential-example")
+            with self.assertLogs("http_cache", level="WARNING") as logs:
+                self.assertEqual(http_cache.get_json(self.url, ttl=21600), {"ok": True})
+            self.assertNotIn("private-credential-example", str(logs.output))
+            with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+                state = http_cache.collection_status()
+                self.assertEqual(state["status"], "paused")
+                self.assertEqual(state["providers"][0]["source"], "FRED")
+                self.assertEqual(state["providers"][0]["reason"], "network_error")
+                self.assertEqual(datetime.fromisoformat(state["providers"][0]["retry_at"]).timestamp(), clock.now + 900)
+            self.assertEqual(self.get.call_count, 2)
+            self.get.side_effect = None
+            clock.now += 901
+            http_cache.get_json(self.url, ttl=21600)
+            self.assertEqual(http_cache.collection_status(), {"status": "ok", "providers": []})
+
+    def test_pause_diagnostics_never_create_cache_or_migrate_reader_schema(self):
+        self.assertEqual(http_cache.collection_status()["status"], "unknown")
+        self.assertFalse(http_cache.cache_path().exists())
+        self.get.return_value = response(status=429)
+        with self.assertRaises(http_cache.DataUnavailable):
+            http_cache.get_bytes(self.url, ttl=60)
+        with closing(sqlite3.connect(http_cache.cache_path())) as db, db:
+            db.execute("DROP TABLE provider_failures")
+        with patch.dict(os.environ, {"DEBT_RISK_RADAR_READ_ONLY": "1"}):
+            self.assertEqual(http_cache.collection_status()["providers"][0]["reason"], "upstream_failure")
+        with closing(sqlite3.connect(http_cache.cache_path())) as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='provider_failures'").fetchone())
+        self.get.assert_called_once()
+
+    def test_failed_early_refresh_preserves_cache_for_each_transient_failure(self):
+        for status in (429, 500, 503):
+            with self.subTest(status=status):
+                clock = FakeClock()
+                params = {"series_id": str(status)}
+                with patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                        patch("http_cache.time.sleep", side_effect=clock.sleep):
+                    self.get.return_value = response()
+                    with closing(http_cache._connect()) as db, db:
+                        db.execute("DELETE FROM providers")
+                    http_cache.get_bytes(self.url, params=params, ttl=21600)
+                    clock.now += 19800
+                    self.get.return_value = response(status=status)
+                    self.assertEqual(http_cache.get_json(self.url, params=params, ttl=21600), {"ok": True})
 
     def test_rate_limit_stops_other_series_and_persists_retry_after(self):
         self.get.return_value = response(status=429, headers={"Retry-After": "3600"})
@@ -395,6 +461,58 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(recovered["quality"]["eligible_signals"], 44)
             self.assertEqual(recovered["score"]["coverage"], 1)
             self.assertIsNotNone(recovered["score"]["current_stress"])
+
+    def test_spy_renewal_failure_keeps_score_until_original_cache_expiry(self):
+        clock = FakeClock()
+        clock.now = time.time()
+        end = pd.Timestamp.now(tz="America/New_York").normalize() - pd.offsets.BDay(1)
+        dates = pd.bdate_range(end=end, periods=80)
+        payloads = {ticker: json.dumps({"results": [
+            {"t": int(day.timestamp() * 1000), "c": 80 + index + offset / 10 + np.sin(offset / 3)}
+            for offset, day in enumerate(dates)
+        ]}).encode() for index, ticker in enumerate(data.MASSIVE_MARKET_SERIES)}
+        calls = []
+        limited = False
+
+        def fetch(url, **kwargs):
+            ticker = next(t for t in payloads if f"/ticker/{t}/" in url)
+            calls.append(ticker)
+            return response(status=429, headers={"Retry-After": "3600"}) if limited and ticker == "SPY" else response(payloads[ticker])
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(os.environ, {"DEBT_RISK_RADAR_CACHE_DIR": directory, "DEBT_RISK_RADAR_READ_ONLY": "0"}), \
+                patch("data.massive_key_available", return_value=True), \
+                patch("data._streamlit_secret", return_value=None), \
+                patch("http_cache.requests.get", side_effect=fetch), \
+                patch("http_cache.time.time", side_effect=lambda: clock.now), \
+                patch("http_cache.time.sleep", side_effect=clock.sleep):
+            original, issues = data.fetch_massive_market()
+            self.assertEqual(issues, [])
+            fetched_spy = clock.now
+            clock.now += 19800
+            limited = True
+            series, issues = data.fetch_massive_market()
+            self.assertEqual(issues, [])
+            pd.testing.assert_series_equal(series["SPY"], original["SPY"])
+            nonmarket = complete_metrics(end.date().isoformat()).query("bucket != 'market_prices'")
+            metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
+            current = build_latest_payload(metrics, pd.DataFrame(), issues, http_cache.collection_status())
+            self.assertEqual(current["quality"]["eligible_signals"], 44)
+            self.assertEqual(current["quality"]["status"], "ok")
+            self.assertIsNotNone(current["score"]["current_stress"])
+            self.assertEqual(current["collection"]["status"], "paused")
+            self.assertEqual(current["collection"]["providers"][0]["reason"], "rate_limit")
+            attempts = len(calls)
+            clock.now += 600
+            self.assertEqual(data.fetch_massive_market()[1], [])
+            self.assertEqual(len(calls), attempts)
+            clock.now = fetched_spy + 21600
+            series, issues = data.fetch_massive_market()
+            metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
+            expired = build_latest_payload(metrics, pd.DataFrame(), issues, http_cache.collection_status())
+            self.assertIsNone(expired["score"]["current_stress"])
+            self.assertEqual(set(expired["quality"]["unavailable_signals"]), {"SPY", "SPY/TLT"})
+            self.assertEqual(len(calls), attempts)
 
     def test_missing_single_signal_reduces_coverage_and_suspends_overall(self):
         raw = complete_metrics()

@@ -147,6 +147,12 @@ sudo systemctl restart debt-risk-radar
   meme compte doivent respecter ensemble le quota du fournisseur.
 - Si le score courant est indisponible, le collecteur publie le JSON degrade et sort avec le code 2.
   Inspecter `quality.unavailable_signals` et le journal avant de poursuivre la bascule.
+- Une pause de renouvellement peut coexister avec une couverture complete : verifier
+  `collection.status` et `collection.providers` pour la cause et `retry_at` en UTC.
+  Le cache conserve son echeance initiale, y compris apres un echec de renouvellement.
+  Le journal publie les identifiants des signaux indisponibles et les pauses actives.
+  Ne pas assimiler un seul passage reussi a une resolution durable : verifier aussi
+  le prochain renouvellement des sources concernees, sans forcer leurs appels.
 
 - Streamlit reste une app serveur : garde-la derriere Apache, jamais exposee directement.
 - Garde `showErrorDetails=false` en production.

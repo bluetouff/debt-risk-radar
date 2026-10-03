@@ -20,6 +20,7 @@ import pandas as pd
 
 from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS
 from quality import assess_metrics
+from http_cache import collection_status
 
 if Path(sys.argv[0]).name == "latest_export.py":
     os.environ.setdefault("DEBT_RISK_RADAR_DISABLE_STREAMLIT_CACHE", "1")
@@ -134,7 +135,8 @@ def load_metric_snapshot(
     return metrics, buckets, issues
 
 
-def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue]) -> dict:
+def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue],
+                         collection: dict | None = None) -> dict:
     generated_at = datetime.now(timezone.utc).replace(microsecond=0)
     metrics = assess_metrics(metrics, now=generated_at)
     buckets = bucket_scores(metrics)
@@ -203,6 +205,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         "description": "Machine-readable snapshot of the public US debt risk dashboard.",
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
         "valid_until": (generated_at + pd.Timedelta(seconds=2 * AUTO_REFRESH_SECONDS)).isoformat().replace("+00:00", "Z"),
+        "collection": collection if collection is not None else {"status": "unknown", "providers": []},
         "public_url": "https://debt.l0g.fr/",
         "latest_json_url": "https://debt.l0g.fr/latest.json",
         "scope": {
@@ -272,7 +275,7 @@ def write_latest_json(payload: dict, output_path: str = LATEST_JSON_PATH) -> Dat
 
 def generate_latest_json(output_path: str = LATEST_JSON_PATH) -> tuple[dict, DataIssue | None]:
     metrics, buckets, issues = load_metric_snapshot()
-    payload = build_latest_payload(metrics, buckets, issues)
+    payload = build_latest_payload(metrics, buckets, issues, collection_status())
     return payload, write_latest_json(payload, output_path)
 
 
@@ -298,6 +301,8 @@ def main() -> int:
                 "quality": payload["quality"]["status"],
                 "coverage": payload["score"]["coverage"],
                 "eligible_signals": payload["quality"]["eligible_signals"],
+                "unavailable_signals": payload["quality"]["unavailable_signals"],
+                "collection": payload["collection"],
             },
             sort_keys=True,
         )

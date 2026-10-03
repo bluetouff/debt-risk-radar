@@ -79,10 +79,19 @@ ainsi que `quality` et `valid_until`. Le score courant est `null` si sa couvertu
 incomplete : aucune valeur manquante n'est remplacee par 50. Un consommateur doit
 verifier `valid_until`, `quality` et `score.coverage` avant d'utiliser le score.
 
+`collection.status` decrit le renouvellement des sources, independamment de la qualite
+des observations encore valides. La valeur `paused` accompagne une liste `providers`
+avec `source`, `reason`, `last_attempt_at` et `retry_at` (UTC). Une pause ne rend pas
+perimee une reponse deja collectee : elle reste utilisable jusqu'a son echeance initiale.
+`unknown` signifie que le diagnostic du collecteur n'est pas disponible. Les motifs
+sont des codes controles, sans URL de requete, cle API ni contenu de reponse.
+
 Les requetes sont mises en cache sur disque pendant six heures pour Treasury/FRED/Massive,
 et vingt-quatre heures pour BIS/CBO/World Bank. Le collecteur commence leur renouvellement
 dans les trente dernieres minutes de validite pour eviter un trou entre deux passages ;
-cette anticipation ne prolonge jamais leur TTL. Les redemarrages du collecteur ne vident
+cette anticipation ne prolonge jamais leur TTL. Si le renouvellement echoue, la reponse
+precedente est conservee tant qu'elle reste valide, y compris apres l'attente reseau.
+Son horodatage initial ne change pas. Les redemarrages du collecteur ne vident
 pas ce cache. En production, l'application publique lit uniquement le cache ; les visites
 ne declenchent aucun appel aux fournisseurs. Les echecs et quotas declenchent une pause
 persistante par fournisseur, sans retry immediat. Voir `DEPLOYMENT.md` pour les services.

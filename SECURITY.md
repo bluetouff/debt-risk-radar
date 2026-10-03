@@ -44,8 +44,11 @@ Les lectures sortantes passent par `http_cache.py` : allowlist HTTPS, pas de red
 delais et tailles limites, cache SQLite prive sans cle API ni en-tete d'autorisation.
 Les echecs ne contournent jamais le cache. Le collecteur renouvelle les reponses dans
 les trente dernieres minutes de leur TTL (10 % pour un TTL plus court) ; les lecteurs
-conservent le TTL initial. Un renouvellement refuse est signale, et une pause active
-n'empeche pas la lecture d'une reponse encore valide. Les reponses expirees ne sont
+conservent le TTL initial. Un renouvellement refuse est signale dans `collection`
+et le journal avec un motif controle, sans contenu fournisseur ni secret. La reponse
+precedente reste lisible uniquement si son TTL n'a pas expire a la fin de la requete.
+Une pause active n'empeche pas sa lecture, sans changer sa date de collecte.
+Les reponses expirees ne sont
 jamais reutilisees comme donnees courantes. Les codes 429 suspendent le fournisseur selon `Retry-After`
 (au moins 15 minutes). Les 429 consecutifs doublent la pause jusqu'a six heures,
 avec un compteur persistant ; un `Retry-After` plus long reste prioritaire. Seule
