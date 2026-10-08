@@ -278,6 +278,7 @@ CBO_DATASETS = {
 }
 
 
+# Legacy connector catalog. Not collected or scored by methodology 2.0.
 MASSIVE_MARKET_SERIES = {
     "TLT": {
         "name": "iShares 20+ Year Treasury Bond ETF",
@@ -347,7 +348,6 @@ BUCKET_WEIGHTS = {
     "world_bank": 0.04,
     "global_credit": 0.10,
     "cbo_projection": 0.10,
-    "market_prices": 0.04,
 }
 
 
@@ -355,6 +355,22 @@ CURRENT_STRESS_BUCKETS = tuple(
     bucket for bucket in BUCKET_WEIGHTS
     if bucket not in STRUCTURAL_BUCKETS
 )
+
+METHODOLOGY_ID = "us-debt-institutional"
+METHODOLOGY_VERSION = "2.0"
+METHODOLOGY_DESCRIPTION = (
+    "Institutional-source US debt stress score. ETF prices and derived signals are retired; "
+    "long-term CBO projections remain structural and excluded from current stress. "
+    "Not directly comparable with the previous ETF-inclusive method."
+)
+CURRENT_BUCKET_WEIGHTS = {
+    bucket: BUCKET_WEIGHTS[bucket] / sum(BUCKET_WEIGHTS[b] for b in CURRENT_STRESS_BUCKETS)
+    for bucket in CURRENT_STRESS_BUCKETS
+}
+ACTIVE_SOURCE_HOSTS = frozenset({
+    "api.stlouisfed.org", "api.fiscaldata.treasury.gov", "api.worldbank.org",
+    "data.bis.org", "raw.githubusercontent.com",
+})
 
 
 WATCH_LEVEL = 65

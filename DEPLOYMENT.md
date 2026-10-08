@@ -1,6 +1,10 @@
-# Debt Risk Radar — deploiement Debian durci
+# Debt Risk Radar : deploiement Debian durci
 
 Objectif : exposer Streamlit uniquement via Apache en HTTPS, sans jamais publier le port applicatif ni les cles API.
+
+Les etapes 1-7 concernent une premiere installation. Pour un serveur existant,
+suivre la section 8 ; ne pas recreer les secrets ni remplacer une configuration
+Apache ou un pare-feu partage sans examiner les differences.
 
 ## 1. Utilisateur systeme
 
@@ -18,8 +22,11 @@ sudo install -d -o debt-radar -g debt-radar -m 755 /opt/debt-risk-radar
 export DEBT_RISK_RADAR_SRC="$HOME/debt-risk-radar"
 
 sudo rsync -a --delete \
+  --exclude .git \
   --exclude .venv \
   --exclude __pycache__ \
+  --exclude .env \
+  --exclude .streamlit/secrets.toml \
   "$DEBT_RISK_RADAR_SRC"/ /opt/debt-risk-radar/
 
 sudo chown -R root:root /opt/debt-risk-radar
@@ -37,7 +44,9 @@ sudo chown root:debt-radar /etc/debt-risk-radar.env
 sudo chmod 640 /etc/debt-risk-radar.env
 ```
 
-Ne mets jamais `FRED_API_KEY` ou `MASSIVE_API_KEY` dans le code, les logs, l'historique shell ou Apache.
+Ne mets jamais `FRED_API_KEY` ni une ancienne cle Massive dans le code, les logs,
+l'historique shell ou Apache. La methode 2.0 n'utilise que la cle FRED ; les anciennes
+variables `MASSIVE_*` ne reactivent pas la collecte ETF.
 
 ## 4. Service systemd
 
@@ -76,6 +85,10 @@ Le vhost exclut `/latest.json` du reverse proxy Streamlit et le sert directement
 
 ## 6. Pare-feu
 
+Exemple pour une machine neuve, apres verification du port SSH et d'un acces de
+secours. Ne pas appliquer ce bloc sur un serveur deja protege par port-knocking
+ou avec des regles partagees : conserver la politique existante.
+
 ```bash
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
@@ -108,43 +121,76 @@ Controle attendu :
 
 ## 8. Mise a jour
 
-```bash
-export DEBT_RISK_RADAR_SRC="$HOME/debt-risk-radar"
+Une activation doit etre explicitement autorisee. Un commit pousse ou un healthcheck
+HTTP reussi ne prouve ni la version active ni la validite des donnees.
 
-sudo rsync -a --delete \
-  --exclude .venv \
-  --exclude __pycache__ \
-  "$DEBT_RISK_RADAR_SRC"/ /opt/debt-risk-radar/
-sudo chown -R root:root /opt/debt-risk-radar
-sudo install -d -o debt-radar -g debt-radar -m 755 /var/www/debt-risk-radar
-sudo install -d -o debt-radar -g debt-radar -m 700 /var/lib/debt-risk-radar/cache
-sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar.service /etc/systemd/system/debt-risk-radar.service
-sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.service /etc/systemd/system/debt-risk-radar-export.service
-sudo cp /opt/debt-risk-radar/deploy/debt-risk-radar-export.timer /etc/systemd/system/debt-risk-radar-export.timer
-sudo systemctl daemon-reload
-sudo cp /opt/debt-risk-radar/deploy/apache-debt-risk-radar.conf /etc/apache2/sites-available/debt-risk-radar.conf
-sudo apache2ctl configtest
-sudo systemctl reload apache2
-sudo systemctl start debt-risk-radar-export.service
-sudo systemctl enable --now debt-risk-radar-export.timer
-sudo systemctl restart debt-risk-radar
-```
+### Preparation de la methode 2.0
+
+1. Verifier le checkout propre, le SHA attendu et le diff. Ne pas ecraser des modifications locales.
+2. Executer les tests hors reseau dans le repertoire de la release :
+   `python -B -m unittest discover -s tests -v`. Utiliser le chemin absolu des tests
+   si le script d'activation est lance depuis un autre repertoire.
+3. Scanner les secrets et verifier le manifeste de fichiers de la release, y compris
+   `quality.py`, `http_cache.py`, les tests et les nouvelles documentations.
+4. Examiner les consommateurs l0g : ils doivent conserver `methodology.id/version`,
+   marquer la rupture de serie et ne pas reemployer l'ancien score comme repli 2.0.
+   Leur adaptation n'est pas faite par le deploiement de ce producteur.
+5. Sauvegarder le code actuellement actif, son SHA et son manifeste dans un dossier
+   prive horodate de `/var/backups/debt-risk-radar`. Ne pas inclure de secrets dans
+   un artefact public. Conserver une copie de l'ancien JSON avec sa date et sa methode.
+
+### Activation bornee
+
+Arreter temporairement le timer et attendre la fin du collecteur avant de remplacer
+les fichiers : ne pas melanger deux versions au cours d'un export. Le script
+d'activation doit restaurer la release precedente si une verification echoue.
+
+Synchroniser uniquement la release verifiee. Preserver `.venv`, `.streamlit`, `.env`,
+`/etc/debt-risk-radar.env` et tout `/var/lib/debt-risk-radar`, notamment le cache et les
+pauses fournisseurs. Garder le code root:root et le repertoire applicatif en 755.
+Ne pas recopier `deploy/debt-risk-radar.env.example` sur les secrets existants.
+
+Cette migration ne change ni les dependances, ni Apache, ni les services systemd.
+Comparer les fichiers deployes avant toute copie de configuration ; aucun reload
+Apache, ouverture de port ou affaiblissement du sandbox n'est necessaire.
+Redemarrer seulement `debt-risk-radar`, puis reactiver le timer et attendre son
+passage naturel. Ne pas vider le cache ni forcer plusieurs collectes.
+
+### Preuves apres activation
+
+- Verifier le SHA deploye et les empreintes des fichiers, pas seulement `git HEAD` du clone.
+- Verifier l'application active, l'ecoute `127.0.0.1:8502` et les healthchecks local/HTTPS.
+- Apres le passage du timer, verifier `/latest.json` en HTTPS : schema `1.2`, methode
+  `us-debt-institutional` / `2.0`, 35 signaux audites, 31 courants attendus, aucun bucket
+  `market_prices`, aucun fournisseur Massive dans les sources actives.
+- Exiger pour une collecte complete : `quality.eligible_signals = 35`,
+  `score.eligible_signals = 31`, `score.coverage = 1`, score fini et `valid_until` futur.
+  Sinon inspecter les signaux institutionnels manquants ; ne pas relacher les seuils.
+- Verifier dans le navigateur la mention methode 2.0, la FAQ, le KPI taux/credit et
+  le graphique FRED sans prix ETF. Verifier aussi la carte l0g et sa provenance.
+- Verifier un renouvellement naturel des caches actifs, et pas seulement un premier
+  export reussi. Une ancienne pause Massive ne doit produire aucun nouvel appel.
+
+### Retour arriere
+
+Restaurer exactement la release sauvegardee, avec son manifeste, puis redemarrer
+l'application et remettre le timer dans son etat initial. Ne pas effacer les caches,
+les secrets ou les pauses. La methode precedente etait dependante de Massive : son
+retour peut retablir l'indisponibilite liee au quota. Ne pas presenter le JSON 2.0
+comme issu de l'ancienne release, ni redater un ancien JSON pour le rendre utilisable.
+Attendre un export coherent avec la release active et verifier son expiration.
 
 ## Notes securite
 
-- Cette mise a jour exige de recopier les deux services et le timer, pas seulement le Python.
-- Verifier `quality`, `score.coverage`, `signals` et `valid_until` dans `latest.json` apres la premiere collecte.
-- Le schema 1.1 suspend `score.current_stress` (`null`) si un signal courant manque ; aucune imputation a 50.
-- Le cache persiste entre les executions : six heures pour Treasury/FRED/Massive, un jour pour BIS/CBO/World Bank.
+- Verifier `methodology`, `quality`, `score.coverage`, `signals` et `valid_until` apres la premiere collecte.
+- La methode 2.0 suspend `score.current_stress` (`null`) si un des 31 signaux courants manque ; aucune imputation a 50.
+- Le cache persiste entre les executions : six heures pour Treasury/FRED, un jour pour BIS/CBO/World Bank.
 - Un second export ne doit declencher aucun appel fournisseur tant que le cache
   n'est pas dans les trente dernieres minutes de son TTL. Le renouvellement anticipe
   ne modifie pas la date d'observation et ne prolonge pas la validite d'une reponse.
-- Les requetes Massive sont espacees de 65 secondes ; cinq reponses non cachees
-  peuvent donc demander plus de quatre minutes. Le delai systemd de dix minutes
-  couvre cette collecte espacee. Ne pas vider le cache ou lancer des collectes
-  repetees pour tenter de contourner un HTTP 429 : la pause persiste et augmente
-  si le fournisseur continue a refuser les appels. Les autres consommateurs du
-  meme compte doivent respecter ensemble le quota du fournisseur.
+- Ne pas vider le cache ou lancer des collectes repetees pour contourner un HTTP 429 :
+  la pause persiste et augmente si le fournisseur continue a refuser les appels.
+  Le retrait de Massive ne modifie pas les pauses des fournisseurs institutionnels.
 - Si le score courant est indisponible, le collecteur publie le JSON degrade et sort avec le code 2.
   Inspecter `quality.unavailable_signals` et le journal avant de poursuivre la bascule.
 - Une pause de renouvellement peut coexister avec une couverture complete : verifier

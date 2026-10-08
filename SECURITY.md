@@ -7,15 +7,17 @@
 - Apache sert `/latest.json` comme fichier statique public genere par un service systemd oneshot.
 - Les cles API sont lues depuis l'environnement serveur ou les secrets Streamlit.
 - Les erreurs upstream sont redigees avant affichage pour eviter les fuites de secrets.
-- Massive Market Data est appele avec `Authorization: Bearer`, jamais avec une cle en query string.
+- La methode 2.0 ne collecte plus Massive ni les neuf signaux ETF, meme si une ancienne cle est configuree.
 
 ## Donnees sensibles
 
-Secrets attendus :
+Secret actif :
 
 - `FRED_API_KEY`
-- `MASSIVE_API_KEY`
-- eventuellement `MASSIVE_BASE_URL`
+
+Les anciens `MASSIVE_API_KEY` et `MASSIVE_BASE_URL` peuvent subsister pour un retour
+arriere. Ils ne sont plus lus par le dashboard ou l'exporteur. Ne pas les imprimer
+ni les purger automatiquement, et ne pas les inclure dans les artefacts publics.
 
 Ces valeurs ne doivent pas etre committees, imprimees, copiees dans le navigateur ou ajoutees aux URLs.
 
@@ -38,7 +40,11 @@ Allowlist fonctionnelle :
 - `data.bis.org`
 - `raw.githubusercontent.com` pour le depot officiel `US-CBO/cbo-data`
 - `api.stlouisfed.org`
-- `api.massive.com` (`MASSIVE_BASE_URL` doit conserver cet hote HTTPS)
+
+`api.massive.com` reste dans l'allowlist du connecteur historique, hors du chemin
+d'execution public. Ce connecteur utilise `Authorization: Bearer`, jamais une cle
+en query string. Les tests conservent ses controles de redaction, cache et quotas.
+Les cinq hotes actifs sont declares dans `catalog.ACTIVE_SOURCE_HOSTS`.
 
 Les lectures sortantes passent par `http_cache.py` : allowlist HTTPS, pas de redirection,
 delais et tailles limites, cache SQLite prive sans cle API ni en-tete d'autorisation.
@@ -55,8 +61,15 @@ avec un compteur persistant ; un `Retry-After` plus long reste prioritaire. Seul
 une nouvelle reponse acceptee remet ce compteur a zero, pas une lecture du cache.
 Les erreurs 401/403 suspendent les appels pendant six heures, les autres echecs
 pendant 15 minutes. Aucun retry immediat. Les appels Massive sont espaces d'au moins
-65 secondes apres la fin de la requete precedente dans cette application ; les
-quotas partages avec d'autres applications doivent etre coordonnes a l'echelle du compte.
+65 secondes apres la fin de la requete precedente dans le connecteur historique,
+non appele par la methode 2.0. Les metadonnees publiques de collecte filtrent ses
+anciennes pauses sans effacer l'etat prive. Les pauses FRED restent visibles.
+
+Le retrait des ETF ne relache aucun controle de qualite : le score courant exige
+31 signaux institutionnels eligibles, sans donnees synthetiques, TTL prolonge ni
+imputation. La methode 2.0 et le schema JSON 1.2 sont explicites pour eviter une
+comparaison silencieuse avec l'ancien score. Voir `METHODOLOGY.md` et `API.md`.
+L'acces gratuit a FRED ne garantit pas les droits de redistribution des series tierces.
 
 Le service public est en lecture seule du cache et ne peut plus ecrire `latest.json`.
 Les restrictions IP systemd limitent ses connexions au loopback. Le collecteur planifie

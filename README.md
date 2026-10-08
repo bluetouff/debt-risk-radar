@@ -2,7 +2,13 @@
 
 Dashboard Streamlit de monitoring du risque lie a la dette souveraine, aux taux, au credit prive et a la liquidite.
 
-L'app est centree sur les Etats-Unis, parce que les sources ouvertes y sont les plus riches et les plus rapides a exploiter. La V2 ajoute BIS, CBO et Massive Market Data.
+L'app est centree sur les Etats-Unis. La methode `us-debt-institutional` version `2.0`
+repose sur Treasury, FRED, BIS et World Bank : 31 signaux courants requis, plus 4
+projections CBO structurelles separees. Elle ne collecte plus de prix d'ETF Massive.
+Ce changement rompt la comparabilite avec l'ancien score incluant les ETF.
+
+Documentation : [methode et poids](METHODOLOGY.md), [contrat JSON](API.md),
+[deploiement et migration](DEPLOYMENT.md), [securite](SECURITY.md).
 
 ## Ce que surveille l'app
 
@@ -13,7 +19,6 @@ L'app est centree sur les Etats-Unis, parce que les sources ouvertes y sont les 
 - Indicateurs annuels comparables via World Bank.
 - Credit-to-GDP gap et debt service ratios via BIS.
 - Projections CBO long terme : dette detenue par le public, dette brute, deficit, interets.
-- Prix et ratios de marche via Massive Market Data.
 - Scenario `r-g` pour tester la trajectoire dette / PIB.
 
 ## Installation
@@ -30,22 +35,22 @@ pip install -r requirements.txt
 
 Treasury Fiscal Data, BIS, CBO et World Bank fonctionnent sans cle API.
 
-FRED est optionnel mais fortement recommande :
+FRED exige une cle API gratuite cote serveur. Ses 19 signaux sont requis pour
+calculer le score courant : sans cette cle, les autres sources restent lisibles
+mais le score est indisponible.
 
 ```bash
 export FRED_API_KEY="ta_cle_fred"
 ```
 
-Massive Market Data est optionnel mais requis pour les prix et ratios de marche :
+En production, renseigner la cle avec `sudoedit /etc/debt-risk-radar.env`, jamais
+dans l'historique shell. Le dashboard et l'exporteur ignorent les anciens reglages
+`MASSIVE_*`. Leur presence n'active aucun appel ni signal ETF.
 
-```bash
-export MASSIVE_API_KEY="ta_cle_massive"
-export MASSIVE_BASE_URL="https://api.massive.com"
-```
-
-La cle Massive est envoyee en header `Authorization: Bearer`, jamais en query string.
-
-Note methodologique importante : pour les prix de marche, ratios financiers, ETF, actions, crypto ou actifs tradables, utilise Massive Market Data en source primaire pour les prix et ratios. Garde FRED, Treasury, BEA, BLS, BIS, SEC EDGAR, CBO, World Bank et IMF pour les donnees institutionnelles.
+L'acces gratuit n'accorde pas automatiquement des droits de redistribution commerciale.
+Les series FRED tierces, notamment ICE BofA, conservent leurs restrictions propres.
+Voir les [conditions FRED](https://fred.stlouisfed.org/docs/api/terms_of_use.html)
+et la section droits de [METHODOLOGY.md](METHODOLOGY.md).
 
 ## Lancement
 
@@ -74,10 +79,12 @@ https://debt.l0g.fr/latest.json
 Le JSON expose le score de stress courant, les scores par famille, les principaux signaux, les sources chargees, les seuils et les flux manquants. Il ne contient jamais de cle API.
 Il est genere par `latest_export.py` et rafraichi par un timer systemd dedie, sans dependance a une visite navigateur.
 
-Le schema 1.1 ajoute tous les `signals`, leur qualite et leur tolerance de fraicheur,
-ainsi que `quality` et `valid_until`. Le score courant est `null` si sa couverture est
+Le schema `1.2` conserve les champs du schema 1.1 et ajoute `methodology`, les poids
+courants normalises et les compteurs du score. Le perimetre passe de 44 a 35 signaux,
+dont 31 courants. Le score courant est `null` si sa couverture est
 incomplete : aucune valeur manquante n'est remplacee par 50. Un consommateur doit
-verifier `valid_until`, `quality` et `score.coverage` avant d'utiliser le score.
+verifier la version de methode, `valid_until`, `quality` et `score.coverage` avant
+d'utiliser le score. Ne pas raccorder automatiquement les deux methodes dans un historique.
 
 `collection.status` decrit le renouvellement des sources, independamment de la qualite
 des observations encore valides. La valeur `paused` accompagne une liste `providers`
@@ -86,7 +93,7 @@ perimee une reponse deja collectee : elle reste utilisable jusqu'a son echeance 
 `unknown` signifie que le diagnostic du collecteur n'est pas disponible. Les motifs
 sont des codes controles, sans URL de requete, cle API ni contenu de reponse.
 
-Les requetes sont mises en cache sur disque pendant six heures pour Treasury/FRED/Massive,
+Les requetes sont mises en cache sur disque pendant six heures pour Treasury/FRED,
 et vingt-quatre heures pour BIS/CBO/World Bank. Le collecteur commence leur renouvellement
 dans les trente dernieres minutes de validite pour eviter un trou entre deux passages ;
 cette anticipation ne prolonge jamais leur TTL. Si le renouvellement echoue, la reponse
@@ -95,12 +102,11 @@ Son horodatage initial ne change pas. Les redemarrages du collecteur ne vident
 pas ce cache. En production, l'application publique lit uniquement le cache ; les visites
 ne declenchent aucun appel aux fournisseurs. Les echecs et quotas declenchent une pause
 persistante par fournisseur, sans retry immediat. Voir `DEPLOYMENT.md` pour les services.
-Les appels Massive sont espaces de 65 secondes apres la fin de chaque requete,
-soit moins d'un appel par minute pour cette application. Une reponse HTTP 429 impose
+Une reponse HTTP 429 impose
 au moins 15 minutes de pause ; des refus consecutifs doublent progressivement cette
 pause jusqu'a six heures, sans jamais raccourcir un `Retry-After` plus long.
-Ce budget local laisse de la marge, mais ne coordonne pas les autres applications
-qui utilisent le meme compte Massive.
+Les pauses des anciens fournisseurs inactifs ne sont plus publiees dans `collection`.
+Leurs donnees de cache et de backoff sont conservees pour permettre un retour arriere.
 
 ## Structure
 
@@ -110,6 +116,8 @@ debt-risk-radar/
 ├── catalog.py         # Series, sources, poids, directions de risque
 ├── data.py            # Connecteurs, normalisation, scoring, scenarios
 ├── latest_export.py   # Generation du snapshot public latest.json
+├── METHODOLOGY.md     # Methode 2.0, poids et limites
+├── API.md             # Contrat JSON 1.2 et regles consommateurs
 ├── DEPLOYMENT.md      # Runbook Debian + Apache + systemd durci
 ├── SECURITY.md        # Modele de securite et checklist
 ├── scripts/           # Checks locaux, dont scan anti-secrets
@@ -121,7 +129,7 @@ debt-risk-radar/
 ## Scoring
 
 Les series FRED et les niveaux Treasury utilisent une fenetre de cinq ans,
-World Bank et les ratios BIS dix ans, les prix Massive deux ans et le CBO trente ans.
+World Bank et les ratios BIS dix ans et le CBO trente ans.
 Certains signaux utilisent aussi des seuils de niveau, notamment le credit gap,
 la croissance de dette et les projections CBO. Le z-score est signe selon le sens du risque :
 
@@ -139,24 +147,27 @@ comme indicateur structurel separe : elles sont affichees et exportees, mais exc
 courant parce qu'elles ne mesurent pas un choc de marche actuel.
 Une famille incomplete n'a pas de score agrege. Le score courant exige toutes les
 familles courantes completes. Les observations valides restent affichees individuellement.
-Les poids courants ci-dessous sont normalises par leur somme (90 %), hors CBO.
+Les coefficients courants ci-dessous sont normalises par leur somme (0,86), hors CBO.
+Ce sont des coefficients de base, pas les pourcentages effectifs du nouveau score.
+Les pourcentages effectifs sont detailles dans [METHODOLOGY.md](METHODOLOGY.md).
 
-- Fiscal solvency : 22 %
-- Rates and market stress : 18 %
-- Private leverage : 12 %
-- Liquidity plumbing : 10 %
-- Treasury daily debt : 10 %
-- Global comparables : 4 %
-- BIS global credit : 10 %
-- CBO projections : 10 %, structurel, exclu du score courant
-- Massive market prices : 4 %
+- Fiscal solvency : 0,22
+- Rates and market stress : 0,18
+- Private leverage : 0,12
+- Liquidity plumbing : 0,10
+- Treasury daily debt : 0,10
+- Global comparables : 0,04 (USA uniquement)
+- BIS global credit : 0,10 (USA uniquement)
+- CBO projections : coefficient historique 0,10, poids effectif courant nul
 
 Seuils d'affichage :
 
-- 65 : watch
-- 80 : stress
+- moins de 50 : Calm
+- 50 a moins de 65 : Elevated
+- 65 a moins de 80 : Watch
+- 80 et plus : Stress
 
-## Sources V1
+## Sources actives
 
 - US Treasury Fiscal Data, `Debt to the Penny`
 - FRED / St. Louis Fed
@@ -164,14 +175,12 @@ Seuils d'affichage :
 - World Bank Indicators API
 - BIS Data Portal bulk downloads : `WS_CREDIT_GAP`, `WS_DSR`
 - CBO Open Data GitHub : `long_term_budget`
-- Massive Market Data : daily aggregates, Polygon-shaped REST
 
 ## Roadmap
 
 - Ajouter BIS total credit (`WS_TC`) en complement du credit gap.
 - Ajouter CBO ten-year budget pour rapprocher projections 10 ans et long terme.
 - Ajouter SEC EDGAR pour dette corporate, maturites et interest expense.
-- Ajouter davantage de tickers Massive : MOVE proxy, ETFs inflation-linked, banques, regional banks, CDS proxy si disponible.
 - Ajouter alertes email ou webhook sur franchissement de seuils.
 - Ajouter persistance DuckDB pour historiser les snapshots et calculer des revisions.
 

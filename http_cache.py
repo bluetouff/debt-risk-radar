@@ -67,7 +67,7 @@ def _connect() -> sqlite3.Connection:
     return db
 
 
-def collection_status() -> dict:
+def collection_status(active_hosts: frozenset[str] | None = None) -> dict:
     """Read only public-safe pause metadata; never create a cache or make a request."""
     try:
         with closing(sqlite3.connect(cache_path().resolve().as_uri() + "?mode=ro", uri=True, timeout=60)) as db:
@@ -77,6 +77,8 @@ def collection_status() -> dict:
             reasons = dict(db.execute("SELECT host, reason FROM provider_failures")) if has_reasons else {}
         providers = []
         for host, attempted, blocked in sorted(rows):
+            if active_hosts is not None and host not in active_hosts:
+                continue
             if host not in PROVIDER_LABELS or not all(math.isfinite(value) for value in (attempted, blocked)):
                 continue
             reason = reasons.get(host)

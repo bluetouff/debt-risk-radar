@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from catalog import CBO_DATASETS, FRED_SERIES, MASSIVE_MARKET_SERIES, WORLD_BANK_INDICATORS
+from catalog import CBO_DATASETS, FRED_SERIES, WORLD_BANK_INDICATORS
 
 
 def expected_metrics() -> dict[tuple[str, str], dict]:
@@ -39,10 +39,6 @@ def expected_metrics() -> dict[tuple[str, str], dict]:
         add("global_credit", f"BIS {name}", {"name": name, "source": "BIS Data Portal"}, 300, "quarterly_period_end")
     for series_id, meta in CBO_DATASETS["long_term_budget"]["variables"].items():
         add("cbo_projection", series_id, dict(meta, source="CBO Open Data"), None, "projection")
-    for series_id, meta in MASSIVE_MARKET_SERIES.items():
-        add("market_prices", series_id, meta, 10, "daily")
-    for series_id in ("HYG/LQD", "TLT/SHY", "SPY/TLT", "HYG 30d realized vol"):
-        add("market_prices", series_id, {"name": series_id, "source": "Massive Market Data"}, 10, "daily")
     return expected
 
 
@@ -73,8 +69,6 @@ def assess_metrics(metrics: pd.DataFrame, now=None) -> pd.DataFrame:
             status, detail = "invalid", "Future observation date."
         elif meta["max_age_days"] is not None and age > meta["max_age_days"]:
             status, detail = "stale", "Observation older than this frequency's tolerance."
-        elif bucket == "market_prices" and row["current"] <= 0 and series_id != "HYG 30d realized vol":
-            status, detail = "invalid", "Non-positive market price or ratio."
         elif not np.isfinite(row["risk_score"]):
             status, detail = "unscored", "Insufficient valid history or zero variance."
         elif not 0 <= row["risk_score"] <= 100 or not np.isfinite(row["weight"]) or row["weight"] <= 0:

@@ -14,10 +14,12 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
-from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, WATCH_LEVEL, STRESS_LEVEL, STRUCTURAL_BUCKETS
+from catalog import (
+    ACTIVE_SOURCE_HOSTS, BUCKET_LABELS, CURRENT_STRESS_BUCKETS, METHODOLOGY_VERSION,
+    WATCH_LEVEL, STRESS_LEVEL, STRUCTURAL_BUCKETS,
+)
 from http_cache import collection_status
 from data import (
     bis_credit_metrics,
@@ -28,13 +30,9 @@ from data import (
     fetch_bis_credit,
     fetch_cbo_projections,
     fetch_fred_series,
-    fetch_massive_market,
     fetch_treasury_debt,
     fetch_world_bank,
-    fred_key_available,
     fred_metrics,
-    massive_key_available,
-    massive_market_metrics,
     current_stress_score,
     score_color,
     score_label,
@@ -565,7 +563,7 @@ def render_faq_page() -> None:
         <div class="faq-grid">
           <div class="faq-card"><strong>Périmètre</strong> Le radar est centré sur la dette US : Treasury, CBO, FRED, BIS et World Bank sont lus sur un socle américain fixe ({DEFAULT_COUNTRY}).</div>
           <div class="faq-card"><strong>Score courant 0-100</strong> 50 signale une zone élevée, 65 une surveillance active, 80 un stress. Ce score exclut les projections CBO long terme.</div>
-          <div class="faq-card"><strong>Sources</strong> Les sources institutionnelles principales sont Treasury Fiscal Data, FRED, BIS, CBO et World Bank. Les signaux de marché passent par Massive Market Data quand la clé est disponible.</div>
+          <div class="faq-card"><strong>Méthode {METHODOLOGY_VERSION}</strong> Treasury Fiscal Data, FRED, BIS et World Bank fournissent 31 signaux courants. Les 4 projections CBO sont séparées. Aucun prix d'ETF n'est collecté.</div>
           <div class="faq-card"><strong>Lecture</strong> Le score courant exclut les projections CBO long terme. Elles restent visibles comme signal structurel, mais ne pilotent pas le stress de marché.</div>
         </div>
         """,
@@ -577,7 +575,7 @@ def render_faq_page() -> None:
             """
             Le radar suit plusieurs familles de signaux courants qui peuvent se renforcer :
             dette publique, charge d'intérêts, déficit, crédit privé,
-            conditions de marché, liquidité et comparables internationaux.
+            conditions de marché, liquidité et indicateurs annuels américains.
 
             Les projections CBO long terme sont conservées comme couche structurelle séparée :
             elles renseignent la soutenabilité, mais ne décrivent pas un stress de marché immédiat.
@@ -592,10 +590,10 @@ def render_faq_page() -> None:
             f"""
             Le dashboard est volontairement centré sur la dette US. Le périmètre est fixé :
             - `{DEFAULT_COUNTRY}` pour Treasury, CBO, FRED, BIS et World Bank.
-            - Marché global pour les prix, taux et spreads quand FRED ou Massive sont disponibles.
+            - Taux et spreads du marché américain via FRED.
 
             Les métriques de marché servent de proxies de transmission : elles indiquent si les taux,
-            les ETF obligataires ou les spreads crédit commencent à refléter une prime de risque.
+            ou les spreads crédit commencent à refléter une prime de risque.
             """
         )
 
@@ -632,7 +630,7 @@ def render_faq_page() -> None:
         st.markdown(
             """
             Certaines sources sont gratuites et sans clé, comme Treasury, BIS, CBO ou World Bank.
-            D'autres nécessitent une clé serveur, comme FRED ou Massive Market Data.
+            FRED nécessite une clé serveur gratuite. Ses 19 signaux sont requis pour le score courant.
 
             Un flux absent, en erreur ou trop ancien est signalé dans la couverture. Sa valeur
             ne remplace jamais une observation récente. Le score courant est suspendu tant que
@@ -654,7 +652,7 @@ def render_faq_page() -> None:
         st.markdown(
             f"""
             L'app se rafraîchit automatiquement toutes les `{AUTO_REFRESH_SECONDS // 60}` minutes.
-            Le cache est valide six heures pour Treasury, FRED et Massive, et vingt-quatre heures
+            Le cache est valide six heures pour Treasury et FRED, et vingt-quatre heures
             pour BIS, CBO et World Bank. Le collecteur commence son renouvellement jusqu'à trente
             minutes avant l'expiration afin d'éviter des interruptions entre deux passages.
             Une visite ou un rafraîchissement de la page publique ne lance aucune collecte.
@@ -677,12 +675,26 @@ def render_faq_page() -> None:
             "un horizon de projection, jamais une date de fraîcheur."
         )
 
-    with st.expander("Les ETF mesurent-ils un rendement total ou un spread ?"):
+    with st.expander("Pourquoi la méthode 2.0 ne contient-elle plus d'ETF ?"):
         st.markdown(
-            "Les prix Massive utilisés sont corrigés des splits, mais pas des distributions en espèces. "
-            "Une baisse lors d'un détachement peut donc affecter le signal. Les variations portent sur "
-            "30 séances, pas 30 jours calendaires. Les ratios d'ETF sont des ratios de prix, "
-            "pas des spreads de rendement ; les spreads OAS sont des séries FRED distinctes."
+            "La méthode 2.0 retire les cinq prix TLT, HYG, LQD, SHY et SPY, leurs trois ratios "
+            "et la volatilité HYG. Le dashboard et le collecteur n'appellent plus Massive. "
+            "Les taux et spreads FRED restent leurs propres séries ; ils ne remplacent pas ces prix.\n\n"
+            "Les sept familles courantes conservent leurs poids relatifs : fiscal 22/86, taux et crédit "
+            "18/86, dette privée 12/86, liquidité 10/86, Treasury 10/86, World Bank 4/86 et BIS 10/86. "
+            "Ce changement de périmètre rompt la comparabilité avec l'ancien score. Un écart lors "
+            "de la bascule ne doit pas être interprété comme une variation du risque.\n\n"
+            "Le score exige toujours les 31 signaux courants valides. Une panne institutionnelle "
+            "peut encore le suspendre ; aucune donnée expirée n'est prolongée."
+        )
+
+    with st.expander("L'accès gratuit autorise-t-il toute réutilisation ?"):
+        st.markdown(
+            "Les API actives ne nécessitent pas d'abonnement payant pour la collecte configurée. "
+            "Cela ne constitue pas une licence générale de redistribution : certaines séries FRED, "
+            "dont les spreads ICE BofA, relèvent de droits tiers. Vérifier les conditions de chaque "
+            "série avant une réutilisation commerciale. "
+            "[Conditions FRED](https://fred.stlouisfed.org/docs/api/terms_of_use.html)."
         )
 
     with st.expander("Quelles sont les limites importantes ?"):
@@ -704,7 +716,8 @@ def render_faq_page() -> None:
             le nombre de métriques attendues et utilisables, ainsi que les dates d'observation.
 
             C'est le bon endroit pour vérifier rapidement si le score repose sur toutes les familles
-            attendues ou si une source optionnelle manque.
+            attendues. Les 31 signaux courants sont requis ; les 4 projections CBO sont auditées séparément.
+            Le JSON public `latest.json` identifie la méthode et ses pondérations.
             """
         )
 
@@ -726,9 +739,9 @@ install_auto_refresh()
 st.markdown(
     f"""
     <div class="help-card">
-      <strong>Perimetre fixe.</strong> Le radar agrège les signaux américains pour la dette fédérale,
-      les projections CBO, FRED, BIS et World Bank ({country}). Les prix, taux et spreads de marche sont
-      utilisés comme proxies de transmission quand Massive/FRED sont disponibles. Auto-refresh toutes les
+      <strong>Méthode {METHODOLOGY_VERSION} · socle institutionnel US.</strong> Le radar suit 31 signaux courants
+      via Treasury, FRED, BIS et World Bank ({country}), plus 4 projections CBO séparées.
+      Les ETF sont exclus ; ce score n'est pas directement comparable à l'ancienne méthode. Auto-refresh toutes les
       {AUTO_REFRESH_SECONDS // 60} min.
     </div>
     """,
@@ -737,28 +750,25 @@ st.markdown(
 
 issues = []
 
-with st.spinner("Loading Treasury, FRED, BIS, CBO, World Bank and Massive data..."):
+with st.spinner("Chargement Treasury, FRED, BIS, CBO et World Bank..."):
     treasury_df, treasury_issues = fetch_treasury_debt(str(treasury_start))
     fred_data, fred_issues = fetch_fred_series(str(fred_start))
     wb_df, wb_issues = fetch_world_bank(country)
     bis_df, bis_issues = fetch_bis_credit(country)
     cbo_df, cbo_issues = fetch_cbo_projections()
-    massive_data, massive_issues = fetch_massive_market()
-    issues.extend(treasury_issues + fred_issues + wb_issues + bis_issues + cbo_issues + massive_issues)
+    issues.extend(treasury_issues + fred_issues + wb_issues + bis_issues + cbo_issues)
 
 treasury_metrics_df = treasury_daily_metrics(treasury_df)
 fred_metrics_df = fred_metrics(fred_data)
 wb_metrics_df = world_bank_metrics(wb_df)
 bis_metrics_df = bis_credit_metrics(bis_df)
 cbo_metrics_df = cbo_projection_metrics(cbo_df)
-massive_metrics_df = massive_market_metrics(massive_data)
 metrics = combine_metrics(
     treasury_metrics_df,
     fred_metrics_df,
     wb_metrics_df,
     bis_metrics_df,
     cbo_metrics_df,
-    massive_metrics_df,
 )
 buckets = bucket_scores(metrics)
 gscore = current_stress_score(buckets)
@@ -767,8 +777,8 @@ coverage = score_coverage(buckets, expected_buckets=CURRENT_STRESS_BUCKETS)
 cbo_score = buckets.loc[buckets["bucket"] == "cbo_projection", "score"]
 fiscal_score = buckets.loc[buckets["bucket"] == "fiscal", "score"]
 fiscal_value = float(fiscal_score.iloc[0]) if len(fiscal_score) else np.nan
-market_score = buckets[buckets["bucket"].isin(["market_prices", "rates_market"])]
-market_value = float(np.average(market_score["score"], weights=market_score["weight"])) if len(market_score) == 2 and (market_score["coverage"] == 1).all() else np.nan
+market_score = buckets.loc[buckets["bucket"] == "rates_market", "score"]
+market_value = float(market_score.iloc[0]) if len(market_score) else np.nan
 private_score = buckets.loc[buckets["bucket"] == "global_credit", "score"]
 private_value = float(private_score.iloc[0]) if len(private_score) else np.nan
 cbo_value = float(cbo_score.iloc[0]) if len(cbo_score) else np.nan
@@ -777,7 +787,7 @@ st.markdown(
     <div class="kpi-grid">
         {metric_card("Stress courant", format_number(gscore), score_label(gscore), score_color(gscore))}
         {metric_card("Fiscal courant", format_number(fiscal_value), score_label(fiscal_value), score_color(fiscal_value))}
-        {metric_card("Marche", format_number(market_value), score_label(market_value), score_color(market_value))}
+        {metric_card("Taux / crédit", format_number(market_value), score_label(market_value), score_color(market_value))}
         {metric_card("Credit BIS", format_number(private_value), score_label(private_value), score_color(private_value))}
         {metric_card("CBO structurel", format_number(cbo_value), score_label(cbo_value), score_color(cbo_value))}
     </div>
@@ -786,7 +796,7 @@ st.markdown(
 )
 
 st.caption(f"Couverture des signaux courants : {coverage:.1%}. Les dates affichées sont les périodes d'observation.")
-collection = collection_status()
+collection = collection_status(ACTIVE_SOURCE_HOSTS)
 if collection["status"] == "paused":
     st.info("Le renouvellement de certaines sources est temporairement en pause. "
             "Les réponses encore valides restent utilisables jusqu'à leur échéance initiale.")
@@ -898,7 +908,8 @@ st.markdown(
     """
     <div class="help-card">
       <strong>Ce bloc se lit comme un moniteur de transmission.</strong> La dette Treasury donne le stock a refinancer.
-      Les prix Massive et les spreads FRED, quand les cles sont configurees, disent si le marche commence a demander une prime.
+      Les taux Treasury et les spreads de crédit via FRED éclairent le coût de financement et les primes de risque.
+      Ce sont des rendements et des écarts de rendement, pas des prix d'ETF.
     </div>
     """,
     unsafe_allow_html=True,
@@ -928,50 +939,21 @@ if not treasury_df.empty:
 else:
     st.info("Treasury daily debt feed unavailable.")
 
-fig_market = make_subplots(specs=[[{"secondary_y": True}]])
+fig_market = go.Figure()
 plotted = False
-if "HYG" in massive_data:
-    fig_market.add_trace(
-        go.Scatter(
-            x=massive_data["HYG"].index,
-            y=massive_data["HYG"],
-            name="HYG close",
-            line=dict(color="#ff4d87"),
-        ),
-        secondary_y=False,
-    )
-    plotted = True
-if "TLT" in massive_data:
-    fig_market.add_trace(
-        go.Scatter(
-            x=massive_data["TLT"].index,
-            y=massive_data["TLT"],
-            name="TLT close",
-            line=dict(color="#5eead4"),
-        ),
-        secondary_y=False,
-    )
-    plotted = True
-if "DGS10" in fred_data:
-    fig_market.add_trace(
-        go.Scatter(x=fred_data["DGS10"].index, y=fred_data["DGS10"], name="10Y yield", line=dict(color="#f5b13d")),
-        secondary_y=True,
-    )
-    plotted = True
-if "BAMLH0A0HYM2" in fred_data:
-    fig_market.add_trace(
-        go.Scatter(
-            x=fred_data["BAMLH0A0HYM2"].index,
-            y=fred_data["BAMLH0A0HYM2"],
-            name="HY OAS",
-            line=dict(color="#ff4d87"),
-        ),
-        secondary_y=True,
-    )
-    plotted = True
-chart_layout(fig_market, "Taux, credit et prix de marche", height=460)
-fig_market.update_yaxes(title_text="ETF price", secondary_y=False)
-fig_market.update_yaxes(title_text="Yield / spread", secondary_y=True)
+for series_id, name, color in (
+    ("DGS10", "Treasury 10 ans (%)", "#f5b13d"),
+    ("BAMLC0A0CM", "IG OAS (points de %)", "#5eead4"),
+    ("BAMLH0A0HYM2", "HY OAS (points de %)", "#ff4d87"),
+):
+    if series_id in fred_data:
+        fig_market.add_trace(go.Scatter(
+            x=fred_data[series_id].index, y=fred_data[series_id], name=name,
+            line=dict(color=color),
+        ))
+        plotted = True
+chart_layout(fig_market, "Taux Treasury et spreads de crédit US · FRED", height=460)
+fig_market.update_yaxes(title_text="Taux (%) / spread (points de %)")
 if plotted:
     st.plotly_chart(fig_market, width="stretch")
 else:
@@ -1087,8 +1069,9 @@ st.markdown(
     """
     <div class="help-card">
       <strong>Lecture des sources.</strong> Les donnees institutionnelles viennent de Treasury Fiscal Data,
-      BIS, CBO, World Bank et FRED. Les prix et ratios de marche passent par Massive quand la cle
-      est presente. Les flux absents sont signales plus haut. Une couverture courante incomplete suspend le score global.
+      BIS, CBO, World Bank et FRED. Les taux et spreads FRED restent distincts des prix d'ETF,
+      retirés de la méthode 2.0. Les flux absents sont signalés plus haut.
+      Une couverture courante incomplète suspend le score global.
     </div>
     """,
     unsafe_allow_html=True,

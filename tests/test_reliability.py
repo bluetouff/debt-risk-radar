@@ -410,7 +410,7 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(series, {})
             self.assertEqual(len(issues), 1)
 
-    def test_massive_quota_incident_suspends_score_and_recovers_only_after_pause(self):
+    def test_legacy_massive_quota_does_not_contribute_to_institutional_score(self):
         clock = FakeClock()
         clock.now = time.time()
         end = pd.Timestamp.now(tz="America/New_York").normalize() - pd.offsets.BDay(1)
@@ -445,8 +445,8 @@ class QualityTests(unittest.TestCase):
             metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
             degraded = build_latest_payload(metrics, pd.DataFrame(), issues)
             missing = {row["series_id"] for row in degraded["signals"] if not row["eligible"]}
-            self.assertEqual(missing, {"SHY", "SPY", "TLT/SHY", "SPY/TLT"})
-            self.assertIsNone(degraded["score"]["current_stress"])
+            self.assertEqual(missing, set())
+            self.assertAlmostEqual(degraded["score"]["current_stress"], 50)
             data.fetch_massive_market()
             self.assertEqual(len(calls), 4)
             with closing(sqlite3.connect(http_cache.cache_path())) as db:
@@ -458,11 +458,11 @@ class QualityTests(unittest.TestCase):
             metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
             recovered = build_latest_payload(metrics, pd.DataFrame(), issues)
             self.assertEqual(recovered["quality"]["status"], "ok")
-            self.assertEqual(recovered["quality"]["eligible_signals"], 44)
+            self.assertEqual(recovered["quality"]["eligible_signals"], 35)
             self.assertEqual(recovered["score"]["coverage"], 1)
             self.assertIsNotNone(recovered["score"]["current_stress"])
 
-    def test_spy_renewal_failure_keeps_score_until_original_cache_expiry(self):
+    def test_legacy_spy_cache_expires_without_affecting_institutional_score(self):
         clock = FakeClock()
         clock.now = time.time()
         end = pd.Timestamp.now(tz="America/New_York").normalize() - pd.offsets.BDay(1)
@@ -497,7 +497,7 @@ class QualityTests(unittest.TestCase):
             nonmarket = complete_metrics(end.date().isoformat()).query("bucket != 'market_prices'")
             metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
             current = build_latest_payload(metrics, pd.DataFrame(), issues, http_cache.collection_status())
-            self.assertEqual(current["quality"]["eligible_signals"], 44)
+            self.assertEqual(current["quality"]["eligible_signals"], 35)
             self.assertEqual(current["quality"]["status"], "ok")
             self.assertIsNotNone(current["score"]["current_stress"])
             self.assertEqual(current["collection"]["status"], "paused")
@@ -510,8 +510,9 @@ class QualityTests(unittest.TestCase):
             series, issues = data.fetch_massive_market()
             metrics = data.combine_metrics(nonmarket, data.massive_market_metrics(series))
             expired = build_latest_payload(metrics, pd.DataFrame(), issues, http_cache.collection_status())
-            self.assertIsNone(expired["score"]["current_stress"])
-            self.assertEqual(set(expired["quality"]["unavailable_signals"]), {"SPY", "SPY/TLT"})
+            self.assertNotIn("SPY", series)
+            self.assertAlmostEqual(expired["score"]["current_stress"], 50)
+            self.assertEqual(expired["quality"]["unavailable_signals"], [])
             self.assertEqual(len(calls), attempts)
 
     def test_missing_single_signal_reduces_coverage_and_suspends_overall(self):

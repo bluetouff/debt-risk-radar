@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -18,7 +19,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from catalog import BUCKET_LABELS, CURRENT_STRESS_BUCKETS, STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS
+from catalog import (
+    ACTIVE_SOURCE_HOSTS, BUCKET_LABELS, CURRENT_BUCKET_WEIGHTS, CURRENT_STRESS_BUCKETS,
+    METHODOLOGY_DESCRIPTION, METHODOLOGY_ID, METHODOLOGY_VERSION,
+    STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS,
+)
 from quality import assess_metrics
 from http_cache import collection_status
 
@@ -34,11 +39,9 @@ from data import (
     fetch_bis_credit,
     fetch_cbo_projections,
     fetch_fred_series,
-    fetch_massive_market,
     fetch_treasury_debt,
     fetch_world_bank,
     fred_metrics,
-    massive_market_metrics,
     current_stress_score,
     score_label,
     score_coverage,
@@ -63,6 +66,15 @@ LATEST_JSON_TOP_SIGNALS = env_int("DEBT_RISK_RADAR_LATEST_JSON_TOP_SIGNALS", 20,
 DEFAULT_COUNTRY = "USA"
 DEFAULT_FRED_START = "1990-01-01"
 DEFAULT_TREASURY_START = "2015-01-01"
+
+
+def source_revision() -> str | None:
+    """Report only the release marker installed by the verified activation."""
+    try:
+        revision = Path(__file__).with_name("DEPLOYED_SHA").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
+    return revision if re.fullmatch(r"[a-f0-9]{40}", revision) else None
 
 
 def json_value(value):
@@ -120,8 +132,7 @@ def load_metric_snapshot(
     wb_df, wb_issues = fetch_world_bank(country)
     bis_df, bis_issues = fetch_bis_credit(country)
     cbo_df, cbo_issues = fetch_cbo_projections()
-    massive_data, massive_issues = fetch_massive_market()
-    issues = treasury_issues + fred_issues + wb_issues + bis_issues + cbo_issues + massive_issues
+    issues = treasury_issues + fred_issues + wb_issues + bis_issues + cbo_issues
 
     metrics = combine_metrics(
         treasury_daily_metrics(treasury_df),
@@ -129,7 +140,6 @@ def load_metric_snapshot(
         world_bank_metrics(wb_df),
         bis_credit_metrics(bis_df),
         cbo_projection_metrics(cbo_df),
-        massive_market_metrics(massive_data),
     )
     buckets = bucket_scores(metrics)
     return metrics, buckets, issues
@@ -170,6 +180,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                     "score": json_value(score),
                     "status": score_label(score),
                     "weight": json_value(float(row["weight"])) if pd.notna(row["weight"]) else None,
+                    "current_weight": CURRENT_BUCKET_WEIGHTS.get(str(row["bucket"]), 0.0),
                     "metrics": int(row["n"]),
                     "expected_metrics": int(row["expected"]),
                     "coverage": json_value(row["coverage"]),
@@ -200,7 +211,16 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
             )
 
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
+        "source_sha": source_revision(),
+        "methodology": {
+            "id": METHODOLOGY_ID,
+            "version": METHODOLOGY_VERSION,
+            "description": METHODOLOGY_DESCRIPTION,
+            "current_bucket_weights": dict(CURRENT_BUCKET_WEIGHTS),
+            "retired_buckets": ["market_prices"],
+            "comparable_with_previous_method": False,
+        },
         "name": "Debt Risk Radar",
         "description": "Machine-readable snapshot of the public US debt risk dashboard.",
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
@@ -211,7 +231,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         "scope": {
             "country": DEFAULT_COUNTRY,
             "focus": "US sovereign debt, fiscal projections, private credit, liquidity and market stress.",
-            "market_data": "FRED and Massive Market Data are used when server-side keys are configured.",
+            "market_data": "US yields and credit spreads via FRED. No ETF price collection or substitution. A server-side FRED key is required.",
         },
         "thresholds": {
             "watch": WATCH_LEVEL,
@@ -227,7 +247,9 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         "score": {
             "current_stress": json_value(float(overall)) if pd.notna(overall) else None,
             "status": score_label(overall),
-            "methodology": "Current stress score excludes structural long-term CBO projections.",
+            "methodology": METHODOLOGY_DESCRIPTION,
+            "expected_signals": int(metrics["bucket"].isin(CURRENT_STRESS_BUCKETS).sum()),
+            "eligible_signals": int((metrics["bucket"].isin(CURRENT_STRESS_BUCKETS) & metrics["eligible"]).sum()),
             "coverage": json_value(current_coverage),
             "coverage_note": "Weighted coverage of eligible expected signals. Current stress is unavailable unless coverage is complete; no neutral imputation.",
             "excluded_buckets": sorted(STRUCTURAL_BUCKETS),
@@ -275,7 +297,7 @@ def write_latest_json(payload: dict, output_path: str = LATEST_JSON_PATH) -> Dat
 
 def generate_latest_json(output_path: str = LATEST_JSON_PATH) -> tuple[dict, DataIssue | None]:
     metrics, buckets, issues = load_metric_snapshot()
-    payload = build_latest_payload(metrics, buckets, issues, collection_status())
+    payload = build_latest_payload(metrics, buckets, issues, collection_status(ACTIVE_SOURCE_HOSTS))
     return payload, write_latest_json(payload, output_path)
 
 
@@ -293,6 +315,7 @@ def main() -> int:
             {
                 "output": args.output,
                 "generated_at": payload["generated_at"],
+                "methodology_version": METHODOLOGY_VERSION,
                 "current_stress": payload["score"]["current_stress"],
                 "status": payload["score"]["status"],
                 "top_signals": len(payload["top_signals"]),
