@@ -29,6 +29,12 @@ class FixedDateTime(datetime):
         return cls(2026, 10, 9, 5, 20, tzinfo=timezone.utc).astimezone(tz)
 
 
+class PreciseDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 10, 9, 6, 10, 12, 500000, tzinfo=timezone.utc).astimezone(tz)
+
+
 def incident_metrics(confirmed=True, checked=NOW):
     raw = complete_metrics("2026-10-09")
     for series_id, value in zip(RATIOS, (122.59387, 98.71050)):
@@ -149,6 +155,23 @@ class PublicationFreshnessTests(unittest.TestCase):
             result = latest_export.build_latest_payload(raw, pd.DataFrame(), [])
         self.assertEqual([row["series_id"] for row in result["quality"]["expiring_signals"]], list(RATIOS))
         self.assertEqual(result["quality"]["expiring_signals"][0]["limit_at"], "2026-10-23T00:00:00+00:00")
+
+    def test_export_keeps_subsecond_confirmation_before_generation(self):
+        raw = incident_metrics(checked="2026-10-09T06:10:12.085284948Z")
+        with patch("latest_export.datetime", PreciseDateTime):
+            result = latest_export.build_latest_payload(raw, pd.DataFrame(), [])
+        self.assertEqual(result["score"]["eligible_signals"], 31)
+        self.assertEqual(result["quality"]["status"], "official-delayed")
+        self.assertEqual(result["generated_at"], "2026-10-09T06:10:12.500000Z")
+        self.assertEqual(result["valid_until"], "2026-10-09T06:40:12.500000Z")
+
+    def test_export_still_rejects_a_genuinely_future_subsecond_confirmation(self):
+        raw = incident_metrics(checked="2026-10-09T06:10:12.750000Z")
+        with patch("latest_export.datetime", PreciseDateTime):
+            result = latest_export.build_latest_payload(raw, pd.DataFrame(), [])
+        self.assertEqual(result["score"]["eligible_signals"], 29)
+        self.assertIsNone(result["score"]["current_stress"])
+        self.assertEqual(result["quality"]["unavailable_signals"], list(RATIOS))
 
     def test_observation_reader_does_not_fetch_metadata_for_recent_daily_data(self):
         payload = {"count": 1, "observations": [{"date": "2026-10-08", "value": "4.2"}]}

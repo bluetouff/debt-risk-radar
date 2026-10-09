@@ -65,6 +65,9 @@ est un identifiant de politique.
 `valid_until` est borne par la premiere echeance effective courante, y compris
 si elle tombe entre deux passages du timer. L'heure de lecture du cache n'est
 jamais une nouvelle heure de collecte.
+La generation conserve ses fractions de seconde : un arrondi vers le bas ne
+doit pas transformer une confirmation deja recue en horodatage futur. Les dates
+reellement futures restent refusees, sans marge ajoutee a ce controle.
 Les valeurs non finies sont serialisees en `null`, jamais `NaN` ou `Infinity`.
 Un `signed_z` nul peut etre normal pour un calcul fonde sur le niveau, tel le credit gap.
 La date CBO est un horizon futur et sa qualite vaut `projection`, pas une observation courante.

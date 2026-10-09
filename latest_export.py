@@ -153,7 +153,7 @@ def load_metric_snapshot(
 
 def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: list[DataIssue],
                          collection: dict | None = None) -> dict:
-    generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+    generated_at = datetime.now(timezone.utc)
     metrics = assess_metrics(metrics, now=generated_at)
     buckets = bucket_scores(metrics)
     overall = current_stress_score(buckets)
