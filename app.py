@@ -59,6 +59,7 @@ DEFAULT_COUNTRY = "USA"
 DEFAULT_FRED_START = "1990-01-01"
 DEFAULT_TREASURY_START = "2015-01-01"
 QUALITY_LABELS = {"ok": "Disponible", "projection": "Projection", "missing": "Absent",
+                  "official_delayed": "Publication officielle différée",
                   "stale": "Trop ancien", "invalid": "Invalide", "unscored": "Historique insuffisant"}
 
 
@@ -674,6 +675,17 @@ def render_faq_page() -> None:
             "les dates de publication. Le CBO utilise le millésime de février 2026 : 2056 est "
             "un horizon de projection, jamais une date de fraîcheur."
         )
+        st.markdown(
+            "Pour les séries FRED trimestrielles proches de cette limite, le collecteur vérifie "
+            "aussi les métadonnées officielles, avec un cache de 24 heures par série. Une observation "
+            "reste utilisable avec la mention **publication officielle différée** uniquement si elle "
+            "correspond au dernier trimestre annoncé par FRED, si la mise à jour de la série date "
+            "d'au plus 120 jours et si la fin du trimestre ne dépasse pas six mois plus 30 jours. "
+            "Ces bornes sont une politique de surveillance, pas un engagement du fournisseur. "
+            "Les réponses doivent toujours respecter leurs échéances de cache. La date de période "
+            "et la valeur ne sont jamais modifiées ; une publication différée n'est pas une donnée du jour. "
+            "Sans cette confirmation, ou au-delà des bornes, le signal est exclu."
+        )
 
     with st.expander("Pourquoi la méthode 2.0 ne contient-elle plus d'ETF ?"):
         st.markdown(
@@ -809,6 +821,16 @@ if collection["status"] == "paused":
                      f"Nouvel essai autorisé à partir de {provider['retry_at']} (UTC), "
                      "lors d'un passage planifié.")
 unavailable = metrics[~metrics["eligible"]]
+delayed = metrics[metrics["quality"] == "official_delayed"]
+if not delayed.empty:
+    st.info("Publication officielle différée : certains ratios trimestriels sont encore les dernières "
+            "observations confirmées par FRED. Ils contribuent au score avec leur période d'origine, "
+            "dans les limites documentées. Ils ne mesurent pas la situation du jour.")
+    with st.expander("Publications différées", expanded=True):
+        for _, row in delayed.iterrows():
+            st.write(f"{row['name']} : période {row['date'].strftime('%Y-%m-%d')} ; "
+                     f"mise à jour FRED {row['publication_updated_at']} ; "
+                     f"métadonnées vérifiées {row['publication_checked_at']}.")
 if not unavailable.empty or issues:
     st.warning("Qualité des données dégradée. Les signaux indisponibles ne contribuent pas au score ; le score courant est suspendu si sa couverture est incomplète.")
     with st.expander("Signaux à vérifier", expanded=False):

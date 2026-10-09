@@ -24,7 +24,7 @@ from catalog import (
     METHODOLOGY_DESCRIPTION, METHODOLOGY_ID, METHODOLOGY_VERSION,
     STRESS_LEVEL, WATCH_LEVEL, STRUCTURAL_BUCKETS,
 )
-from quality import assess_metrics
+from quality import assess_metrics, FRESHNESS_POLICY_VERSION, PUBLICATION_WARNING_DAYS
 from http_cache import collection_status
 
 if Path(sys.argv[0]).name == "latest_export.py":
@@ -119,6 +119,12 @@ def metric_record(row: pd.Series) -> dict:
         "frequency": str(row.get("frequency", "unknown")),
         "observation_age_days": json_value(row.get("observation_age_days")),
         "max_age_days": json_value(row.get("max_age_days")),
+        "freshness_basis": row.get("freshness_basis", "observation_age"),
+        "freshness_expires_at": json_value(row.get("freshness_expires_at")),
+        "freshness_limit_at": json_value(row.get("freshness_limit_at")),
+        **{key: json_value(row.get(key)) for key in (
+            "observation_checked_at", "publication_observation_end", "publication_updated_at",
+            "publication_checked_at", "publication_frequency")},
     }
 
 
@@ -210,6 +216,12 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                 }
             )
 
+    valid_until = generated_at + pd.Timedelta(seconds=2 * AUTO_REFRESH_SECONDS)
+    if pd.notna(overall):
+        deadlines = metrics.loc[metrics["bucket"].isin(CURRENT_STRESS_BUCKETS), "freshness_expires_at"].dropna()
+        if not deadlines.empty:
+            valid_until = min(valid_until, deadlines.min())
+    delayed = metrics.loc[metrics["quality"] == "official_delayed", "series_id"].tolist()
     return {
         "schema_version": "1.2",
         "source_sha": source_revision(),
@@ -224,7 +236,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         "name": "Debt Risk Radar",
         "description": "Machine-readable snapshot of the public US debt risk dashboard.",
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
-        "valid_until": (generated_at + pd.Timedelta(seconds=2 * AUTO_REFRESH_SECONDS)).isoformat().replace("+00:00", "Z"),
+        "valid_until": valid_until.isoformat().replace("+00:00", "Z"),
         "collection": collection if collection is not None else {"status": "unknown", "providers": []},
         "public_url": "https://debt.l0g.fr/",
         "latest_json_url": "https://debt.l0g.fr/latest.json",
@@ -259,11 +271,20 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         "top_signals": top_rows,
         "signals": [metric_record(row) for _, row in metrics.iterrows()],
         "quality": {
-            "status": "degraded" if issues or not metrics["eligible"].all() else "ok",
+            "policy_version": FRESHNESS_POLICY_VERSION,
+            "status": "degraded" if issues or not metrics["eligible"].all() else "official-delayed" if delayed else "ok",
             "expected_signals": len(metrics),
             "eligible_signals": int(metrics["eligible"].sum()),
             "unavailable_signals": metrics.loc[~metrics["eligible"], "series_id"].tolist(),
-            "note": "Observation-age tolerances allow publication delays; they do not certify that every provider has published no newer data. CBO February 2026 vintage is pinned.",
+            "delayed_signals": delayed,
+            "expiring_signals": [
+                {"series_id": row["series_id"], "limit_at": json_value(row["freshness_limit_at"])}
+                for _, row in metrics.iterrows()
+                if row["eligible"] and pd.notna(row["freshness_limit_at"])
+                and generated_at < row["freshness_limit_at"] <= generated_at + pd.Timedelta(days=PUBLICATION_WARNING_DAYS)
+                and row["frequency"] == "quarterly_period_start"
+            ],
+            "note": "Official-delayed quarterly signals require recent matching FRED publication metadata and bounded publication/period ages. Other observation-age tolerances do not prove latest-publication status. CBO February 2026 vintage is pinned.",
         },
         "sources": source_rows,
         "issues": [{"source": issue.source, "detail": issue.detail} for issue in issues],
@@ -325,6 +346,8 @@ def main() -> int:
                 "coverage": payload["score"]["coverage"],
                 "eligible_signals": payload["quality"]["eligible_signals"],
                 "unavailable_signals": payload["quality"]["unavailable_signals"],
+                "delayed_signals": payload["quality"]["delayed_signals"],
+                "expiring_signals": payload["quality"]["expiring_signals"],
                 "collection": payload["collection"],
             },
             sort_keys=True,

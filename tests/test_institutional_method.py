@@ -113,11 +113,11 @@ class InstitutionalMethodTests(unittest.TestCase):
             self.assertEqual([p["source"] for p in state["providers"]], ["FRED"])
             self.assertEqual(len(http_cache.collection_status()["providers"]), 2)
 
-    def mock_feeds(self, module):
+    def mock_feeds(self, module, raw=None):
         """Synthetic complete metrics with empty chart data, only in the test process."""
         self.stack.enter_context(patch.dict(os.environ, {"MASSIVE_API_KEY": "test-only"}))
         self.stack.enter_context(patch("data.fetch_massive_market", side_effect=AssertionError("Retired connector called")))
-        raw = complete_metrics(self.today)
+        raw = complete_metrics(self.today) if raw is None else raw
         specs = (
             ("treasury_debt", "treasury_daily", ["treasury_daily"]),
             ("fred_series", "fred", ["fiscal", "rates_market", "private_leverage", "liquidity"]),
@@ -168,6 +168,22 @@ class InstitutionalMethodTests(unittest.TestCase):
             markup = "\n".join(item.value for item in app.markdown)
             self.assertIn("31 signaux", markup)
             self.assertIn("rompt la comparabilité", markup)
+
+    def test_dashboard_explains_confirmed_delayed_publication_without_calling_it_unavailable(self):
+        from streamlit.testing.v1 import AppTest
+        from test_publication_freshness import incident_metrics, NOW
+
+        with tempfile.TemporaryDirectory() as directory:
+            self.seed_pauses(directory)
+            self.mock_feeds("data", incident_metrics())
+            self.stack.enter_context(patch("data.assess_metrics", side_effect=lambda rows: assess_metrics(rows, now=NOW)))
+            app = AppTest.from_file(str(ROOT / "app.py")).run(timeout=20)
+            self.assertEqual(len(app.exception), 0)
+            self.assertTrue(any("Publication officielle différée" in item.value for item in app.info))
+            self.assertFalse(any("Qualité des données dégradée" in item.value for item in app.warning))
+            markup = "\n".join(item.value for item in app.markdown)
+            self.assertIn("2026-01-01", markup)
+            self.assertIn("2026-06-25", markup)
 
 
 if __name__ == "__main__":

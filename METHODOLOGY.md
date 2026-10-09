@@ -103,6 +103,50 @@ Le cache HTTP expire apres 6 h pour FRED/Treasury et 24 h pour BIS/CBO/World Ban
 meme si la date d'observation reste admissible. Une panne peut donc encore suspendre
 le score institutionnel ; le retrait de Massive n'est pas une garantie de disponibilite absolue.
 
+### Publications trimestrielles differees (politique de fraicheur 2)
+
+Le 9 octobre 2026, `GFDEGDQ188S` et `FYGFGDQ188S` ont franchi la limite de
+280 jours depuis le debut du T1 2026. FRED affichait toujours ce trimestre,
+mis a jour le 25 juin. Il ne s'agissait ni d'un quota ni d'un cache expire.
+La verification ponctuelle de disponibilite faite la veille ne couvrait pas
+ce changement de jour. Les tests reproduisent desormais cette transition.
+
+Les dates ne sont pas redatees et le seuil general de 280 jours reste en place.
+Une serie FRED trimestrielle dispose d'une exception explicite `official_delayed`
+si une reponse recente de `fred/series` confirme son identifiant, sa frequence
+et exactement la derniere periode des observations collectees. La date FRED
+`last_updated` est la mise a jour de la serie, pas la date du trimestre et pas
+necessairement celle de sa premiere publication.
+
+Toutes ces conditions sont requises :
+- Observations collectees depuis moins de six heures, metadonnees depuis moins
+  de vingt-quatre heures ; lire le cache ne modifie jamais ces dates.
+- Mise a jour FRED non future, posterieure a la fin du trimestre et anterieure
+  aux deux collectes. Aucun trimestre plus recent annonce dans les metadonnees.
+- Au plus 120 jours calendaires depuis cette mise a jour (environ un cycle
+  trimestriel et quatre semaines de marge).
+- Au plus six mois et 30 jours depuis la fin du trimestre. Une simple revision
+  de la serie ne prolonge donc pas indefiniment une observation ancienne.
+
+Les deux dernieres bornes sont des choix de surveillance, pas des delais garantis
+par FRED. Au-dela, ou sans confirmation, le signal reste exclu. L'exception ne
+s'applique ni aux observations quotidiennes, ni aux valeurs invalides, ni aux
+historiques insuffisants. La formule, les poids et les 31 signaux restent ceux
+de la methode 2.0 ; `quality.policy_version` versionne cette regle separement.
+
+La publication differee est visible dans le dashboard et dans les consommateurs
+l0g. Le JSON fournit les horodatages, les bornes et les signaux qui approchent
+de leur limite d'age sous quatorze jours. `valid_until` ne depasse pas la premiere
+echeance d'eligibilite d'un signal courant. Les metadonnees sont demandees seulement
+a l'approche du seuil (14 jours), avec cache 24 h, anticipation normale du cache
+et limitations fournisseur inchangees. Aucun appel n'est lance par le navigateur.
+
+Sources du diagnostic et du contrat :
+- [Ratio dette totale/PIB, definition et periode publiee](https://fred.stlouisfed.org/series/GFDEGDQ188S)
+- [Ratio dette detenue par le public/PIB](https://fred.stlouisfed.org/series/FYGFGDQ188S)
+- [Metadonnees FRED : observation_end, frequency_short, last_updated](https://fred.stlouisfed.org/docs/api/fred/series.html)
+- [Calendrier officiel de la publication](https://fred.stlouisfed.org/releases/calendar?rid=263&y=2026)
+
 ## Acces, droits et provenance
 
 La collecte configuree ne requiert pas d'abonnement payant ; FRED necessite une cle.

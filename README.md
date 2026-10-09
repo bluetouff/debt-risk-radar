@@ -7,6 +7,11 @@ repose sur Treasury, FRED, BIS et World Bank : 31 signaux courants requis, plus 
 projections CBO structurelles separees. Elle ne collecte plus de prix d'ETF Massive.
 Ce changement rompt la comparabilite avec l'ancien score incluant les ETF.
 
+La politique de fraicheur 2 distingue une publication trimestrielle FRED differee
+d'une panne de collecte : confirmation officielle recente, bornes d'age explicites,
+periode d'origine preservee et avertissement visible. Aucun seuil n'est prolonge
+sans cette verification. Voir [METHODOLOGY.md](METHODOLOGY.md) et [API.md](API.md).
+
 Documentation : [methode et poids](METHODOLOGY.md), [contrat JSON](API.md),
 [deploiement et migration](DEPLOYMENT.md), [securite](SECURITY.md).
 

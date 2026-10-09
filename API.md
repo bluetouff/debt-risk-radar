@@ -31,7 +31,7 @@ ne declenche aucun appel aux fournisseurs.
 | `score.structural` | Score CBO separe, sans contribution au score courant |
 | `signals` | Les 35 signaux attendus, y compris ceux indisponibles |
 | `top_signals` | Au plus 20 signaux courants eligibles classes par risque, configurable cote serveur |
-| `quality` | Audit global des 35 signaux ; `ok` ou `degraded`, compteurs et identifiants indisponibles |
+| `quality` | Audit global des 35 signaux ; `ok`, `official-delayed` ou `degraded`, compteurs et identifiants indisponibles |
 | `sources` | Effectifs, dates des observations et horizon des projections par source |
 | `issues` | Source et diagnostic controle, sans secret ni reponse brute |
 | `collection` | Diagnostic de renouvellement des cinq fournisseurs actifs |
@@ -47,6 +47,24 @@ contribution de 10 % au score courant.
 Chaque signal contient notamment `bucket`, `series_id`, `name`, `source`, `unit`,
 `date`, `current`, `signed_z`, `risk_score`, `quality`, `quality_detail`, `eligible`,
 `frequency`, `observation_age_days` et `max_age_days`.
+
+La politique de fraicheur `quality.policy_version = "2"` conserve le schema `1.2`
+et la formule economique `2.0`. Un signal trimestriel `quality = "official_delayed"`
+est eligible seulement avec confirmation FRED recente et respect des bornes
+decrites dans `METHODOLOGY.md`. Ce n'est pas une observation du jour.
+`quality.delayed_signals` liste ces signaux, et `quality.expiring_signals` annonce
+leurs prochaines limites d'age (14 jours). Une publication differee ne doit etre
+presentee ni comme une panne de collecte ni comme une qualite nominale.
+
+Les champs additionnels des signaux sont `freshness_basis`, `freshness_limit_at`
+(limite d'age), `freshness_expires_at` (echeance effective incluant les caches),
+`observation_checked_at`, `publication_observation_end`, `publication_updated_at`,
+`publication_checked_at` et `publication_frequency`. Les champs de date sont
+des horodatages UTC, sinon `null` ; la frequence est `Q` et la base de fraicheur
+est un identifiant de politique.
+`valid_until` est borne par la premiere echeance effective courante, y compris
+si elle tombe entre deux passages du timer. L'heure de lecture du cache n'est
+jamais une nouvelle heure de collecte.
 Les valeurs non finies sont serialisees en `null`, jamais `NaN` ou `Infinity`.
 Un `signed_z` nul peut etre normal pour un calcul fonde sur le niveau, tel le credit gap.
 La date CBO est un horizon futur et sa qualite vaut `projection`, pas une observation courante.

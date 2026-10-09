@@ -126,6 +126,14 @@ HTTP reussi ne prouve ni la version active ni la validite des donnees.
 
 ### Preparation de la methode 2.0
 
+Pour la politique de fraicheur 2, deployer ensemble `http_cache.py`, `data.py`,
+`quality.py`, `latest_export.py` et `app.py`, puis le consommateur l0g qui affiche
+`official-delayed`. Ne pas effacer le cache ni provoquer une collecte manuelle.
+Le prochain passage normal peut demander deux metadonnees FRED supplementaires
+si les deux ratios dette/PIB approchent leur limite. Elles sont ensuite cachees
+24 h avec les memes pauses fournisseur. Verifier `quality.policy_version`,
+`delayed_signals`, les dates `publication_*` et `valid_until`, pas uniquement HTTP 200.
+
 1. Verifier le checkout propre, le SHA attendu et le diff. Ne pas ecraser des modifications locales.
 2. Executer les tests hors reseau dans le repertoire de la release :
    `python -B -m unittest discover -s tests -v`. Utiliser le chemin absolu des tests

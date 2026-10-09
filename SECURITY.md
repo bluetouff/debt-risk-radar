@@ -71,6 +71,13 @@ imputation. La methode 2.0 et le schema JSON 1.2 sont explicites pour eviter une
 comparaison silencieuse avec l'ancien score. Voir `METHODOLOGY.md` et `API.md`.
 L'acces gratuit a FRED ne garantit pas les droits de redistribution des series tierces.
 
+La politique de fraicheur 2 utilise les metadonnees du meme hote FRED autorise,
+avec les memes plafonds, verrous, pauses et redaction des secrets. Elle ne change
+aucun TTL de cache. Les dates de collecte sont celles de la reponse persistante,
+jamais celles d'une lecture. Une confirmation doit correspondre a l'identifiant,
+a la frequence et a la periode ; les dates futures et les bornes depassees sont
+rejetees. Aucun nouvel appel reseau depuis l'application publique.
+
 Le service public est en lecture seule du cache et ne peut plus ecrire `latest.json`.
 Les restrictions IP systemd limitent ses connexions au loopback. Le collecteur planifie
 est seul autorise a interroger les fournisseurs. Creer et remplir le cache avant

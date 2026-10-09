@@ -10,6 +10,7 @@ import os
 import sqlite3
 import time
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -107,8 +108,14 @@ def _retry_after(value: str | None, now: float) -> float:
     return max(FAILURE_COOLDOWN, delay)
 
 
-def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = None,
-              ttl: int, cache_key: str | None = None) -> bytes:
+@dataclass(frozen=True)
+class CachedResponse:
+    body: bytes
+    fetched_at: float
+
+
+def _get_response(url: str, *, params: dict | None = None, headers: dict | None = None,
+                  ttl: int, cache_key: str | None = None) -> CachedResponse:
     parts = urlsplit(url)
     if (parts.scheme != "https" or parts.hostname not in ALLOWED_HOSTS
             or parts.port not in (None, 443) or parts.username or parts.password
@@ -130,7 +137,7 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
             # Renew before the next timer tick without extending the readers' TTL.
             refresh_age = ttl - min(CACHE_REFRESH_WINDOW, ttl / 10)
             if fresh and (read_only() or now - cached[0] < refresh_age):
-                return bytes(cached[1])
+                return CachedResponse(bytes(cached[1]), cached[0])
             if read_only():
                 raise DataUnavailable("Source cache missing or expired; awaiting scheduled collection.")
 
@@ -138,7 +145,7 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
             state = db.execute("SELECT last_request, blocked_until FROM providers WHERE host=?", (host,)).fetchone()
             if state and state[1] > now:
                 if fresh:
-                    return bytes(cached[1])
+                    return CachedResponse(bytes(cached[1]), cached[0])
                 raise DataUnavailable("Provider temporarily paused after an upstream failure or rate limit.")
             interval = MASSIVE_REQUEST_INTERVAL if host == "api.massive.com" else 1.0
             if state:
@@ -189,7 +196,8 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
             if error is None:
                 db.execute("DELETE FROM rate_limits WHERE host=?", (host,))
                 db.execute("DELETE FROM provider_failures WHERE host=?", (host,))
-                db.execute("INSERT OR REPLACE INTO responses VALUES (?, ?, ?)", (key, time.time(), body))
+                fetched_at = time.time()
+                db.execute("INSERT OR REPLACE INTO responses VALUES (?, ?, ?)", (key, fetched_at, body))
             else:
                 db.execute("INSERT OR REPLACE INTO provider_failures VALUES (?, ?)", (host, failure_reason))
             db.commit()
@@ -201,15 +209,25 @@ def get_bytes(url: str, *, params: dict | None = None, headers: dict | None = No
                                PROVIDER_LABELS[host], failure_reason,
                                blocked_until, still_fresh)
                 if still_fresh:
-                    return bytes(cached[1])
+                    return CachedResponse(bytes(cached[1]), cached[0])
                 raise DataUnavailable(error)
-            return body
+            return CachedResponse(body, fetched_at)
     except (sqlite3.Error, OSError) as exc:
         raise DataUnavailable("Persistent source cache unavailable; no uncached request attempted.") from exc
 
 
-def get_json(url: str, **kwargs):
+def get_bytes(url: str, **kwargs) -> bytes:
+    return _get_response(url, **kwargs).body
+
+
+def get_json_document(url: str, **kwargs):
+    """Return the original retrieval time, never the time a cache is read."""
+    response = _get_response(url, **kwargs)
     try:
-        return json.loads(get_bytes(url, **kwargs))
+        return json.loads(response.body), response.fetched_at
     except (ValueError, UnicodeError) as exc:
         raise DataUnavailable("Invalid upstream JSON payload.") from exc
+
+
+def get_json(url: str, **kwargs):
+    return get_json_document(url, **kwargs)[0]

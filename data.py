@@ -16,8 +16,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from http_cache import DataUnavailable, get_bytes, get_json, read_only
-from quality import assess_metrics, expected_metrics
+from http_cache import DataUnavailable, get_bytes, get_json, get_json_document, read_only
+from quality import assess_metrics, expected_metrics, PUBLICATION_WARNING_DAYS, PUBLICATION_METADATA_TTL
 
 from catalog import (
     BIS_BULK_FEEDS,
@@ -91,6 +91,26 @@ def iter_fred_catalog() -> Iterable[Tuple[str, str, dict]]:
             yield bucket, series_id, meta
 
 
+def _fred_publication(series_id, series, key):
+    """Verify identity and last observed quarter; only near-age-limit series call this."""
+    payload, fetched = get_json_document("https://api.stlouisfed.org/fred/series",
+                                        ttl=PUBLICATION_METADATA_TTL,
+                                        params={"api_key": key, "series_id": series_id, "file_type": "json"})
+    rows = payload.get("seriess", [])
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise DataUnavailable("Invalid FRED series metadata.")
+    meta = rows[0]
+    end = pd.to_datetime(meta.get("observation_end"), errors="coerce", utc=True)
+    updated = pd.to_datetime(meta.get("last_updated"), errors="coerce", utc=True)
+    if (meta.get("id") != series_id or meta.get("frequency_short") != "Q"
+            or pd.isna(end) or pd.isna(updated)
+            or end != series.index[-1].tz_localize("UTC")):
+        raise DataUnavailable("FRED publication metadata does not match the latest observation.")
+    return {"publication_observation_end": end.isoformat(), "publication_updated_at": updated.isoformat(),
+            "publication_checked_at": pd.Timestamp(fetched, unit="s", tz="UTC").isoformat(),
+            "publication_frequency": "Q"}
+
+
 @cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], List[DataIssue]]:
     if not fred_key_available() and not read_only():
@@ -100,9 +120,10 @@ def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], 
     data: Dict[str, pd.Series] = {}
     issues: List[DataIssue] = []
 
-    for _, series_id, _ in iter_fred_catalog():
+    catalog = expected_metrics()
+    for bucket, series_id, _ in iter_fred_catalog():
         try:
-            payload = get_json("https://api.stlouisfed.org/fred/series/observations", ttl=6 * 3600,
+            payload, fetched = get_json_document("https://api.stlouisfed.org/fred/series/observations", ttl=6 * 3600,
                                params={"api_key": key, "series_id": series_id, "file_type": "json",
                                        "observation_start": start, "limit": 100000})
             observations = payload.get("observations", [])
@@ -116,7 +137,20 @@ def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], 
             series = pd.to_numeric(series, errors="coerce").dropna()
             if len(series) > 0:
                 series.index = pd.to_datetime(series.index)
-                data[series_id] = series.astype(float)
+                if series.index.has_duplicates or not series.index.is_monotonic_increasing or not np.isfinite(series).all():
+                    raise DataUnavailable("Invalid or duplicate FRED observations.")
+                series = series.astype(float)
+                series.attrs["observation_checked_at"] = pd.Timestamp(fetched, unit="s", tz="UTC").isoformat()
+                policy = catalog.get((bucket, series_id), {})
+                age = (pd.Timestamp.now(tz="UTC").normalize().tz_localize(None) - series.index[-1]).days
+                if (policy.get("frequency") == "quarterly_period_start"
+                        and age >= policy["max_age_days"] - PUBLICATION_WARNING_DAYS):
+                    try:
+                        series.attrs.update(_fred_publication(series_id, series, key))
+                    except Exception as exc:
+                        # Keep the observed value for audit; quality.py decides eligibility.
+                        series.attrs["publication_error"] = _safe_error(exc)
+                data[series_id] = series
             else:
                 issues.append(DataIssue("FRED", f"{series_id}: empty series."))
         except Exception as exc:
@@ -446,6 +480,9 @@ def fred_metrics(all_data: Dict[str, pd.Series]) -> pd.DataFrame:
                 "weight": meta["weight"],
                 "source": meta["source"],
                 "rationale": meta["rationale"],
+                **{key: all_data[series_id].attrs.get(key) for key in (
+                    "observation_checked_at", "publication_observation_end", "publication_updated_at",
+                    "publication_checked_at", "publication_frequency", "publication_error")},
             }
         )
     return pd.DataFrame(rows)

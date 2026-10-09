@@ -390,7 +390,7 @@ class QualityTests(unittest.TestCase):
         ]}
         with patch("data.fred_key_available", return_value=True), patch("data._streamlit_secret", return_value=None), \
                 patch("data.iter_fred_catalog", return_value=[("rates_market", "DGS10", {})]), \
-                patch("data.get_json", return_value=payload) as get:
+                patch("data.get_json_document", return_value=(payload, time.time())) as get:
             series, issues = data.fetch_fred_series()
         self.assertEqual(issues, [])
         self.assertEqual(series["DGS10"].tolist(), [4.5, 4.6])
