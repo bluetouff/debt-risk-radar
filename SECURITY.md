@@ -50,30 +50,32 @@ Les lectures sortantes passent par `http_cache.py` : allowlist HTTPS, pas de red
 delais et tailles limites, cache SQLite prive sans cle API ni en-tete d'autorisation.
 Les echecs ne contournent jamais le cache. Le collecteur renouvelle les reponses dans
 les trente dernieres minutes de leur TTL (10 % pour un TTL plus court) ; les lecteurs
-conservent le TTL initial. Un renouvellement refuse est signale dans `collection`
+appliquent une limite maximale distincte de cette cadence (politique 3). Un renouvellement refuse est signale dans `collection`
 et le journal avec un motif controle, sans contenu fournisseur ni secret. La reponse
-precedente reste lisible uniquement si son TTL n'a pas expire a la fin de la requete.
+precedente reste lisible uniquement si sa limite maximale n'a pas expire a la fin de la requete.
 Une pause active n'empeche pas sa lecture, sans changer sa date de collecte.
 Les reponses expirees ne sont
-jamais reutilisees comme donnees courantes. Les codes 429 suspendent le fournisseur selon `Retry-After`
-(au moins 15 minutes). Les 429 consecutifs doublent la pause jusqu'a six heures,
+jamais reutilisees comme donnees courantes. Les erreurs HTTP respectent `Retry-After`
+(au moins 15 minutes). Les echecs reseau, HTTP ou de validation consecutifs doublent la pause jusqu'a six heures,
 avec un compteur persistant ; un `Retry-After` plus long reste prioritaire. Seule
 une nouvelle reponse acceptee remet ce compteur a zero, pas une lecture du cache.
 Les erreurs 401/403 suspendent les appels pendant six heures, les autres echecs
-pendant 15 minutes. Aucun retry immediat. Les appels Massive sont espaces d'au moins
+pendant au moins 15 minutes, puis selon ce backoff. Aucun retry immediat. Les appels Massive sont espaces d'au moins
 65 secondes apres la fin de la requete precedente dans le connecteur historique,
 non appele par la methode 2.0. Les metadonnees publiques de collecte filtrent ses
 anciennes pauses sans effacer l'etat prive. Les pauses FRED restent visibles.
 
 Le retrait des ETF ne relache aucun controle de qualite : le score courant exige
-31 signaux institutionnels eligibles, sans donnees synthetiques, TTL prolonge ni
+31 signaux institutionnels eligibles, sans donnees synthetiques, date rajeunie ni
 imputation. La methode 2.0 et le schema JSON 1.2 sont explicites pour eviter une
 comparaison silencieuse avec l'ancien score. Voir `METHODOLOGY.md` et `API.md`.
 L'acces gratuit a FRED ne garantit pas les droits de redistribution des series tierces.
 
-La politique de fraicheur 2 utilise les metadonnees du meme hote FRED autorise,
-avec les memes plafonds, verrous, pauses et redaction des secrets. Elle ne change
-aucun TTL de cache. Les dates de collecte sont celles de la reponse persistante,
+La politique de fraicheur 3 utilise les memes hotes autorises,
+plafonds, verrous, pauses et redaction des secrets. `source_validation.py` valide
+les formats, identifiants, dates, doublons et valeurs avant tout remplacement du cache.
+Le JSON non fini est rejete. Les archives BIS gardent leur plafond de decompression.
+Les dates de collecte sont celles de la reponse persistante,
 jamais celles d'une lecture. Une confirmation doit correspondre a l'identifiant,
 a la frequence et a la periode ; les dates futures et les bornes depassees sont
 rejetees. Aucun nouvel appel reseau depuis l'application publique.

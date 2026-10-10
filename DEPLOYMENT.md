@@ -126,13 +126,15 @@ HTTP reussi ne prouve ni la version active ni la validite des donnees.
 
 ### Preparation de la methode 2.0
 
-Pour la politique de fraicheur 2, deployer ensemble `http_cache.py`, `data.py`,
-`quality.py`, `latest_export.py` et `app.py`, puis le consommateur l0g qui affiche
-`official-delayed`. Ne pas effacer le cache ni provoquer une collecte manuelle.
+Pour la politique de fraicheur 3, deployer ensemble `http_cache.py`, `data.py`,
+`source_validation.py`, `quality.py`, `latest_export.py` et `app.py`, puis le
+consommateur l0g qui affiche `official-delayed` et `cached`. Ne pas effacer le cache
+ni provoquer une collecte manuelle. L'ancien cache est revalide a la lecture.
 Le prochain passage normal peut demander deux metadonnees FRED supplementaires
 si les deux ratios dette/PIB approchent leur limite. Elles sont ensuite cachees
-24 h avec les memes pauses fournisseur. Verifier `quality.policy_version`,
-`delayed_signals`, les dates `publication_*` et `valid_until`, pas uniquement HTTP 200.
+avec renouvellement 6 h et limite maximale 48 h, avec les memes pauses fournisseur.
+Verifier `quality.policy_version`, `cached_signals`, `delayed_signals`, les dates
+`publication_*`, `observation_checked_at` et `valid_until`, pas uniquement HTTP 200.
 
 1. Verifier le checkout propre, le SHA attendu et le diff. Ne pas ecraser des modifications locales.
 2. Executer les tests hors reseau dans le repertoire de la release :
@@ -178,6 +180,10 @@ passage naturel. Ne pas vider le cache ni forcer plusieurs collectes.
   le graphique FRED sans prix ETF. Verifier aussi la carte l0g et sa provenance.
 - Verifier un renouvellement naturel des caches actifs, et pas seulement un premier
   export reussi. Une ancienne pause Massive ne doit produire aucun nouvel appel.
+- Observer au moins 48 h couvrant renouvellements, changement de jour et redemarrage
+  planifie avant de conclure a une stabilite observee. Les simulations hors reseau
+  de six jours de panne, expiration au septieme jour, reponse invalide et reprise
+  sont des preuves de comportement du code, pas une preuve de disponibilite en production.
 
 ### Retour arriere
 
@@ -192,10 +198,11 @@ Attendre un export coherent avec la release active et verifier son expiration.
 
 - Verifier `methodology`, `quality`, `score.coverage`, `signals` et `valid_until` apres la premiere collecte.
 - La methode 2.0 suspend `score.current_stress` (`null`) si un des 31 signaux courants manque ; aucune imputation a 50.
-- Le cache persiste entre les executions : six heures pour Treasury/FRED, un jour pour BIS/CBO/World Bank.
+- Le cache persiste : renouvellement 6 h Treasury/FRED, 24 h BIS/CBO/World Bank ;
+  reutilisation maximale 48 h Treasury/FRED, 7 jours BIS/World Bank, 30 jours CBO fige.
 - Un second export ne doit declencher aucun appel fournisseur tant que le cache
   n'est pas dans les trente dernieres minutes de son TTL. Le renouvellement anticipe
-  ne modifie pas la date d'observation et ne prolonge pas la validite d'une reponse.
+  ne modifie pas la date d'observation ni la limite maximale d'une reponse.
 - Ne pas vider le cache ou lancer des collectes repetees pour contourner un HTTP 429 :
   la pause persiste et augmente si le fournisseur continue a refuser les appels.
   Le retrait de Massive ne modifie pas les pauses des fournisseurs institutionnels.

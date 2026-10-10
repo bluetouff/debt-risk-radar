@@ -78,7 +78,7 @@ def source_revision() -> str | None:
 
 
 def json_value(value):
-    if value is None:
+    if value is None or value is pd.NaT:
         return None
     if isinstance(value, pd.Timestamp):
         return None if pd.isna(value) else value.isoformat()
@@ -122,6 +122,10 @@ def metric_record(row: pd.Series) -> dict:
         "freshness_basis": row.get("freshness_basis", "observation_age"),
         "freshness_expires_at": json_value(row.get("freshness_expires_at")),
         "freshness_limit_at": json_value(row.get("freshness_limit_at")),
+        "cache_status": row.get("cache_status", "unknown"),
+        "cache_expires_at": json_value(row.get("cache_expires_at")),
+        "cache_refresh_seconds": json_value(row.get("cache_refresh_seconds")),
+        "cache_max_age_seconds": json_value(row.get("cache_max_age_seconds")),
         **{key: json_value(row.get(key)) for key in (
             "observation_checked_at", "publication_observation_end", "publication_updated_at",
             "publication_checked_at", "publication_frequency")},
@@ -222,6 +226,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         if not deadlines.empty:
             valid_until = min(valid_until, deadlines.min())
     delayed = metrics.loc[metrics["quality"] == "official_delayed", "series_id"].tolist()
+    cached = metrics.loc[metrics["cache_status"] == "cached", "series_id"].tolist()
     return {
         "schema_version": "1.2",
         "source_sha": source_revision(),
@@ -255,6 +260,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                 "market": 6 * 3600,
                 "institutional": 24 * 3600,
             },
+            "source_max_cache_age_seconds": {"market": 48 * 3600, "institutional": 7 * 86400, "cbo_pinned": 30 * 86400},
         },
         "score": {
             "current_stress": json_value(float(overall)) if pd.notna(overall) else None,
@@ -272,11 +278,19 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
         "signals": [metric_record(row) for _, row in metrics.iterrows()],
         "quality": {
             "policy_version": FRESHNESS_POLICY_VERSION,
-            "status": "degraded" if issues or not metrics["eligible"].all() else "official-delayed" if delayed else "ok",
+            "status": "degraded" if issues or not metrics["eligible"].all() else "cached" if cached else "official-delayed" if delayed else "ok",
             "expected_signals": len(metrics),
             "eligible_signals": int(metrics["eligible"].sum()),
             "unavailable_signals": metrics.loc[~metrics["eligible"], "series_id"].tolist(),
             "delayed_signals": delayed,
+            "cached_signals": cached,
+            "cache_expiring_signals": [
+                {"series_id": row["series_id"], "expires_at": json_value(row["freshness_expires_at"])}
+                for _, row in metrics.iterrows()
+                if row["eligible"] and row["cache_status"] == "cached"
+                and pd.notna(row["freshness_expires_at"])
+                and generated_at < row["freshness_expires_at"] <= generated_at + pd.Timedelta(days=1)
+            ],
             "expiring_signals": [
                 {"series_id": row["series_id"], "limit_at": json_value(row["freshness_limit_at"])}
                 for _, row in metrics.iterrows()
@@ -284,7 +298,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                 and generated_at < row["freshness_limit_at"] <= generated_at + pd.Timedelta(days=PUBLICATION_WARNING_DAYS)
                 and row["frequency"] == "quarterly_period_start"
             ],
-            "note": "Official-delayed quarterly signals require recent matching FRED publication metadata and bounded publication/period ages. Other observation-age tolerances do not prove latest-publication status. CBO February 2026 vintage is pinned.",
+            "note": "Cache renewal cadence is distinct from bounded reuse of validated responses. Original retrieval and observation dates are preserved; cached signals are explicit. Economic-age limits still apply. Quarterly publication evidence is bounded to 48 hours. CBO February 2026 vintage is pinned.",
         },
         "sources": source_rows,
         "issues": [{"source": issue.source, "detail": issue.detail} for issue in issues],
@@ -347,6 +361,8 @@ def main() -> int:
                 "eligible_signals": payload["quality"]["eligible_signals"],
                 "unavailable_signals": payload["quality"]["unavailable_signals"],
                 "delayed_signals": payload["quality"]["delayed_signals"],
+                "cached_signals": payload["quality"]["cached_signals"],
+                "cache_expiring_signals": payload["quality"]["cache_expiring_signals"],
                 "expiring_signals": payload["quality"]["expiring_signals"],
                 "collection": payload["collection"],
             },

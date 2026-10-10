@@ -185,6 +185,22 @@ class InstitutionalMethodTests(unittest.TestCase):
             self.assertIn("2026-01-01", markup)
             self.assertIn("2026-06-25", markup)
 
+    def test_dashboard_labels_reused_cache_and_keeps_its_original_timestamp(self):
+        from streamlit.testing.v1 import AppTest
+        raw = complete_metrics(self.today)
+        now = pd.Timestamp.now(tz="UTC")
+        raw["observation_checked_at"] = now.isoformat()
+        original = (now - pd.Timedelta(days=2)).isoformat()
+        raw.loc[raw.bucket == "world_bank", "observation_checked_at"] = original
+        with tempfile.TemporaryDirectory() as directory:
+            self.seed_pauses(directory)
+            self.mock_feeds("data", raw)
+            app = AppTest.from_file(str(ROOT / "app.py")).run(timeout=20)
+            self.assertEqual(len(app.exception), 0)
+            self.assertTrue(any("Cache source validé" in item.value for item in app.info))
+            self.assertFalse(any("Qualité des données dégradée" in item.value for item in app.warning))
+            self.assertIn(original, "\n".join(item.value for item in app.markdown))
+
 
 if __name__ == "__main__":
     unittest.main()

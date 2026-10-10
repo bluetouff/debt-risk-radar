@@ -7,15 +7,17 @@ repose sur Treasury, FRED, BIS et World Bank : 31 signaux courants requis, plus 
 projections CBO structurelles separees. Elle ne collecte plus de prix d'ETF Massive.
 Ce changement rompt la comparabilite avec l'ancien score incluant les ETF.
 
-La politique de fraicheur 2 distingue une publication trimestrielle FRED differee
-d'une panne de collecte : confirmation officielle recente, bornes d'age explicites,
-periode d'origine preservee et avertissement visible. Aucun seuil n'est prolonge
-sans cette verification. Voir [METHODOLOGY.md](METHODOLOGY.md) et [API.md](API.md).
+La politique de fraicheur 3 distingue la cadence de renouvellement, la limite de
+reutilisation d'une reponse validee et l'age de l'observation economique. Une panne
+reseau ne supprime plus une observation au seul passage du delai de renouvellement.
+Le cache reutilise et les publications trimestrielles differees restent explicites,
+avec leurs dates d'origine et des limites fermes. Voir [METHODOLOGY.md](METHODOLOGY.md)
+et [API.md](API.md).
 
 Documentation : [methode et poids](METHODOLOGY.md), [contrat JSON](API.md),
 [deploiement et migration](DEPLOYMENT.md), [securite](SECURITY.md).
 
-## Ce que surveille l'app
+## Signaux suivis
 
 - Dette publique US quotidienne via Treasury Fiscal Data.
 - Dette publique / PIB, dette detenue par le public / PIB, deficit et interets federaux via FRED.
@@ -98,17 +100,19 @@ perimee une reponse deja collectee : elle reste utilisable jusqu'a son echeance 
 `unknown` signifie que le diagnostic du collecteur n'est pas disponible. Les motifs
 sont des codes controles, sans URL de requete, cle API ni contenu de reponse.
 
-Les requetes sont mises en cache sur disque pendant six heures pour Treasury/FRED,
-et vingt-quatre heures pour BIS/CBO/World Bank. Le collecteur commence leur renouvellement
-dans les trente dernieres minutes de validite pour eviter un trou entre deux passages ;
-cette anticipation ne prolonge jamais leur TTL. Si le renouvellement echoue, la reponse
-precedente est conservee tant qu'elle reste valide, y compris apres l'attente reseau.
+Les reponses sont renouvelees toutes les six heures pour Treasury/FRED, et toutes
+les vingt-quatre heures pour BIS/CBO/World Bank, avec anticipation de trente minutes.
+Leur reutilisation maximale depuis la collecte est de 48 h, sept jours et trente jours
+respectivement pour Treasury/FRED, BIS/World Bank et le CBO fige. Le JSON et l'interface
+signalent le depassement de la cadence par `cached`, sans prolonger l'age economique admis.
+Une reponse est validee avant remplacement atomique du cache ; une erreur HTTP 200
+malformee ne remplace pas l'historique exploitable. Les limites sont recontrolees apres l'attente reseau.
 Son horodatage initial ne change pas. Les redemarrages du collecteur ne vident
 pas ce cache. En production, l'application publique lit uniquement le cache ; les visites
 ne declenchent aucun appel aux fournisseurs. Les echecs et quotas declenchent une pause
 persistante par fournisseur, sans retry immediat. Voir `DEPLOYMENT.md` pour les services.
-Une reponse HTTP 429 impose
-au moins 15 minutes de pause ; des refus consecutifs doublent progressivement cette
+Un echec reseau, une reponse invalide ou HTTP en erreur impose
+au moins 15 minutes de pause ; des echecs consecutifs doublent progressivement cette
 pause jusqu'a six heures, sans jamais raccourcir un `Retry-After` plus long.
 Les pauses des anciens fournisseurs inactifs ne sont plus publiees dans `collection`.
 Leurs donnees de cache et de backoff sont conservees pour permettre un retour arriere.

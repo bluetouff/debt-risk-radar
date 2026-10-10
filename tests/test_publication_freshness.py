@@ -37,6 +37,7 @@ class PreciseDateTime(datetime):
 
 def incident_metrics(confirmed=True, checked=NOW):
     raw = complete_metrics("2026-10-09")
+    raw["observation_checked_at"] = NOW
     for series_id, value in zip(RATIOS, (122.59387, 98.71050)):
         mask = raw.series_id == series_id
         raw.loc[mask, "date"] = pd.Timestamp("2026-01-01")
@@ -89,9 +90,9 @@ class PublicationFreshnessTests(unittest.TestCase):
         cases = (("publication_observation_end", "2026-04-01"), ("publication_frequency", "M"),
                  ("publication_updated_at", None), ("publication_updated_at", "2026-10-10"),
                  ("publication_updated_at", "2026-01-02"), ("publication_updated_at", "2026-06-01"),
-                 ("publication_checked_at", "2026-10-08T05:20:00Z"),
+                 ("publication_checked_at", "2026-10-07T05:20:00Z"),
                  ("publication_checked_at", "2026-10-09T05:21:00Z"),
-                 ("observation_checked_at", "2026-10-08T23:20:00Z"),
+                 ("observation_checked_at", "2026-10-07T05:20:00Z"),
                  ("observation_checked_at", "2026-10-10T05:20:00Z"),
                  ("observation_checked_at", "2026-06-24T05:20:00Z"))
         for field, value in cases:
@@ -99,7 +100,7 @@ class PublicationFreshnessTests(unittest.TestCase):
                 raw = incident_metrics()
                 raw.loc[raw.series_id == RATIOS[0], field] = value
                 row = assess_metrics(raw, now=NOW).query("series_id == 'GFDEGDQ188S'").iloc[0]
-                self.assertEqual(row.quality, "stale")
+                self.assertIn(row.quality, {"stale", "invalid"})
                 self.assertFalse(row.eligible)
 
     def test_revision_cannot_keep_an_old_quarter_alive(self):
@@ -112,6 +113,7 @@ class PublicationFreshnessTests(unittest.TestCase):
 
     def test_midnight_without_confirmation_is_a_real_deadline(self):
         raw = incident_metrics(False)
+        raw["observation_checked_at"] = "2026-10-08T18:00:00Z"
         before = assess_metrics(raw, now="2026-10-08T23:59:59Z")
         after = assess_metrics(raw, now="2026-10-09T00:00:00Z")
         mask = raw.series_id.isin(RATIOS)
@@ -119,7 +121,7 @@ class PublicationFreshnessTests(unittest.TestCase):
         self.assertFalse(after.loc[mask, "eligible"].any())
 
     def test_pre_midnight_evidence_cannot_certify_beyond_its_own_expiry(self):
-        raw = incident_metrics(checked="2026-10-08T18:00:00Z")
+        raw = incident_metrics(checked="2026-10-07T00:00:00Z")
         checked = assess_metrics(raw, now="2026-10-08T23:59:59Z")
         row = checked.query("series_id == 'GFDEGDQ188S'").iloc[0]
         self.assertTrue(row.eligible)
@@ -140,8 +142,8 @@ class PublicationFreshnessTests(unittest.TestCase):
 
     def test_export_preserves_delayed_status_evidence_and_expiry(self):
         with patch("latest_export.datetime", FixedDateTime):
-            result = latest_export.build_latest_payload(incident_metrics(checked="2026-10-08T23:25:00Z"), pd.DataFrame(), [])
-        self.assertEqual(result["quality"]["status"], "official-delayed")
+            result = latest_export.build_latest_payload(incident_metrics(checked="2026-10-07T05:25:00Z"), pd.DataFrame(), [])
+        self.assertEqual(result["quality"]["status"], "cached")
         self.assertEqual(result["quality"]["delayed_signals"], list(RATIOS))
         self.assertEqual(result["score"]["eligible_signals"], 31)
         self.assertEqual(result["valid_until"], "2026-10-09T05:25:00Z")

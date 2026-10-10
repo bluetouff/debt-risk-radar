@@ -642,8 +642,9 @@ def render_faq_page() -> None:
             cette attente, les signaux valides restent visibles. Recharger la page ne force
             aucun appel et ne raccourcit pas la pause.
 
-            Si un renouvellement échoue, la dernière réponse reste utilisable jusqu'à son
-            échéance initiale. La pause du fournisseur et l'heure de reprise autorisée sont
+            Si un renouvellement échoue, la dernière réponse validée reste utilisable dans
+            une limite maximale distincte de la cadence de renouvellement. Son ancienneté
+            et sa réutilisation sont signalées. La pause et l'heure de reprise autorisée sont
             signalées séparément. À l'expiration, le signal devient indisponible et le score
             courant est suspendu si sa couverture est incomplète.
             """
@@ -653,9 +654,13 @@ def render_faq_page() -> None:
         st.markdown(
             f"""
             L'app se rafraîchit automatiquement toutes les `{AUTO_REFRESH_SECONDS // 60}` minutes.
-            Le cache est valide six heures pour Treasury et FRED, et vingt-quatre heures
-            pour BIS, CBO et World Bank. Le collecteur commence son renouvellement jusqu'à trente
-            minutes avant l'expiration afin d'éviter des interruptions entre deux passages.
+            Le renouvellement vise six heures pour Treasury et FRED, et vingt-quatre heures
+            pour BIS, CBO et World Bank, avec une anticipation maximale de trente minutes.
+            En cas d'échec, une réponse validée peut être réutilisée pendant au maximum
+            48 heures depuis sa collecte pour Treasury/FRED, sept jours pour BIS/World Bank,
+            et trente jours pour le millésime CBO figé. La mention **cache source validé**
+            distingue cette situation d'une collecte renouvelée. Les limites d'âge des
+            observations économiques restent applicables et peuvent expirer plus tôt.
             Une visite ou un rafraîchissement de la page publique ne lance aucune collecte.
 
             Attention : beaucoup de séries publiques sont trimestrielles, annuelles ou publiées avec délai.
@@ -677,7 +682,8 @@ def render_faq_page() -> None:
         )
         st.markdown(
             "Pour les séries FRED trimestrielles proches de cette limite, le collecteur vérifie "
-            "aussi les métadonnées officielles, avec un cache de 24 heures par série. Une observation "
+            "aussi les métadonnées officielles, renouvelées toutes les six heures et réutilisables "
+            "au maximum 48 heures depuis leur collecte en cas de panne. Une observation "
             "reste utilisable avec la mention **publication officielle différée** uniquement si elle "
             "correspond au dernier trimestre annoncé par FRED, si la mise à jour de la série date "
             "d'au plus 120 jours et si la fin du trimestre ne dépasse pas six mois plus 30 jours. "
@@ -822,6 +828,15 @@ if collection["status"] == "paused":
                      "lors d'un passage planifié.")
 unavailable = metrics[~metrics["eligible"]]
 delayed = metrics[metrics["quality"] == "official_delayed"]
+cached = metrics[(metrics["cache_status"] == "cached") & metrics["eligible"]]
+if not cached.empty:
+    st.info("Cache source validé : certaines réponses dépassent leur cadence de renouvellement. "
+            "Les valeurs et dates d'origine sont conservées dans les limites documentées ; "
+            "une nouvelle publication peut ne pas encore être intégrée.")
+    with st.expander("Sources réutilisées et échéances", expanded=False):
+        for _, row in cached.iterrows():
+            st.write(f"{row['name']} : réponse collectée {row['observation_checked_at']} ; "
+                     f"échéance effective {row['freshness_expires_at']}.")
 if not delayed.empty:
     st.info("Publication officielle différée : certains ratios trimestriels sont encore les dernières "
             "observations confirmées par FRED. Ils contribuent au score avec leur période d'origine, "

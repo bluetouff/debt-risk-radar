@@ -5,8 +5,6 @@ Data access and scoring for Debt Risk Radar.
 from __future__ import annotations
 
 import os
-import io
-import zipfile
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -16,8 +14,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from http_cache import DataUnavailable, get_bytes, get_json, get_json_document, read_only
-from quality import assess_metrics, expected_metrics, PUBLICATION_WARNING_DAYS, PUBLICATION_METADATA_TTL
+from http_cache import DataUnavailable, get_json, get_json_document, get_document, read_only
+from quality import (assess_metrics, expected_metrics, PUBLICATION_WARNING_DAYS, PUBLICATION_METADATA_TTL,
+                     PUBLICATION_METADATA_MAX_AGE, OBSERVATION_CACHE_MAX_AGE,
+                     INSTITUTIONAL_CACHE_MAX_AGE, CBO_CACHE_MAX_AGE)
+import source_validation as validation
 
 from catalog import (
     BIS_BULK_FEEDS,
@@ -95,16 +96,11 @@ def _fred_publication(series_id, series, key):
     """Verify identity and last observed quarter; only near-age-limit series call this."""
     payload, fetched = get_json_document("https://api.stlouisfed.org/fred/series",
                                         ttl=PUBLICATION_METADATA_TTL,
+                                        max_age=PUBLICATION_METADATA_MAX_AGE,
+                                        validator=lambda value: validation.fred_publication(value, series_id),
                                         params={"api_key": key, "series_id": series_id, "file_type": "json"})
-    rows = payload.get("seriess", [])
-    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
-        raise DataUnavailable("Invalid FRED series metadata.")
-    meta = rows[0]
-    end = pd.to_datetime(meta.get("observation_end"), errors="coerce", utc=True)
-    updated = pd.to_datetime(meta.get("last_updated"), errors="coerce", utc=True)
-    if (meta.get("id") != series_id or meta.get("frequency_short") != "Q"
-            or pd.isna(end) or pd.isna(updated)
-            or end != series.index[-1].tz_localize("UTC")):
+    end, updated = validation.fred_publication(payload, series_id)
+    if end != series.index[-1].tz_localize("UTC"):
         raise DataUnavailable("FRED publication metadata does not match the latest observation.")
     return {"publication_observation_end": end.isoformat(), "publication_updated_at": updated.isoformat(),
             "publication_checked_at": pd.Timestamp(fetched, unit="s", tz="UTC").isoformat(),
@@ -124,17 +120,10 @@ def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], 
     for bucket, series_id, _ in iter_fred_catalog():
         try:
             payload, fetched = get_json_document("https://api.stlouisfed.org/fred/series/observations", ttl=6 * 3600,
+                               max_age=OBSERVATION_CACHE_MAX_AGE, validator=validation.fred_observations,
                                params={"api_key": key, "series_id": series_id, "file_type": "json",
                                        "observation_start": start, "limit": 100000})
-            observations = payload.get("observations", [])
-            if payload.get("count", len(observations)) != len(observations):
-                raise DataUnavailable("Incomplete FRED observations response.")
-            series = pd.Series(
-                [item["value"] for item in observations],
-                index=pd.to_datetime([item["date"] for item in observations]),
-                dtype="object",
-            )
-            series = pd.to_numeric(series, errors="coerce").dropna()
+            series = validation.fred_observations(payload)
             if len(series) > 0:
                 series.index = pd.to_datetime(series.index)
                 if series.index.has_duplicates or not series.index.is_monotonic_increasing or not np.isfinite(series).all():
@@ -159,13 +148,14 @@ def fetch_fred_series(start: str = "1990-01-01") -> Tuple[Dict[str, pd.Series], 
     return data, issues
 
 
-def _fiscaldata_get(url: str, params: dict) -> dict:
-    payload = get_json(url, params=params, ttl=6 * 3600)
+def _fiscaldata_get(url: str, params: dict) -> tuple[dict, float]:
+    payload, fetched = get_json_document(url, params=params, ttl=6 * 3600,
+                                       max_age=OBSERVATION_CACHE_MAX_AGE, validator=validation.treasury)
     if "data" not in payload:
         raise DataUnavailable("No data field in Fiscal Data response.")
     if int(payload.get("meta", {}).get("total-pages", 1)) > 1:
         raise DataUnavailable("Incomplete Treasury response: pagination required.")
-    return payload
+    return payload, fetched
 
 
 @cache_data(ttl=6 * 3600, show_spinner=False)
@@ -179,15 +169,9 @@ def fetch_treasury_debt(start: str = "2015-01-01") -> Tuple[pd.DataFrame, List[D
     }
 
     try:
-        payload = _fiscaldata_get(endpoint["url"], params)
-        df = pd.DataFrame(payload["data"])
-        if df.empty:
-            raise DataUnavailable("Debt to the Penny returned no rows.")
-        df["record_date"] = pd.to_datetime(df["record_date"])
-        for col in ["debt_held_public_amt", "intragov_hold_amt", "tot_pub_debt_out_amt"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=["record_date", "tot_pub_debt_out_amt"])
-        df = df.sort_values("record_date")
+        payload, fetched = _fiscaldata_get(endpoint["url"], params)
+        df = validation.treasury(payload)
+        df.attrs["observation_checked_at"] = pd.Timestamp(fetched, unit="s", tz="UTC").isoformat()
         return df, []
     except Exception as exc:
         return pd.DataFrame(), [DataIssue(endpoint["source"], _safe_error(exc))]
@@ -202,19 +186,18 @@ def fetch_world_bank(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
         url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
         params = {"format": "json", "per_page": 120}
         try:
-            payload = get_json(url, params=params, ttl=24 * 3600)
-            if not isinstance(payload, list) or len(payload) < 2:
-                raise DataUnavailable("Unexpected World Bank payload.")
-            for item in payload[1]:
-                if item.get("value") is None:
-                    continue
+            payload, fetched = get_json_document(url, params=params, ttl=24 * 3600,
+                max_age=INSTITUTIONAL_CACHE_MAX_AGE,
+                validator=lambda value: validation.world_bank(value, country, indicator))
+            for item in validation.world_bank(payload, country, indicator):
                 rows.append(
                     {
                         "indicator": indicator,
                         "name": meta["name"],
-                        "date": pd.to_datetime(f"{item['date']}-12-31"),
+                        "date": item["date"],
                         "value": float(item["value"]),
                         "unit": meta["unit"],
+                        "observation_checked_at": pd.Timestamp(fetched, unit="s", tz="UTC").isoformat(),
                     }
                 )
         except Exception as exc:
@@ -233,13 +216,10 @@ def _fy_to_timestamp(value: str) -> pd.Timestamp:
 
 
 def _download_bis_flat_csv(url: str) -> pd.DataFrame:
-    body = get_bytes(url, ttl=24 * 3600)
-    with zipfile.ZipFile(io.BytesIO(body)) as archive:
-        csv_files = [item for item in archive.infolist() if item.filename.endswith(".csv")]
-        if len(csv_files) != 1 or csv_files[0].file_size > 100 * 1024 * 1024:
-            raise DataUnavailable("BIS archive has unexpected contents or exceeds the size limit.")
-        with archive.open(csv_files[0]) as handle:
-            return pd.read_csv(handle)
+    frame, fetched = get_document(url, parser=validation.bis_archive,
+                                 ttl=24 * 3600, max_age=INSTITUTIONAL_CACHE_MAX_AGE)
+    frame.attrs["observation_checked_at"] = pd.Timestamp(fetched, unit="s", tz="UTC").isoformat()
+    return frame
 
 
 def _bis_codes(values: pd.Series) -> pd.Series:
@@ -272,6 +252,7 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
                 rows.append(
                     {
                         "dataset": "credit_gap",
+                        **gap_df.attrs,
                         "metric": metric_name,
                         "date": item["date"],
                         "value": float(item["value"]),
@@ -298,6 +279,7 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
                 rows.append(
                     {
                         "dataset": "dsr",
+                        **dsr_df.attrs,
                         "metric": metric_name,
                         "date": item["date"],
                         "value": float(item["value"]),
@@ -314,10 +296,10 @@ def fetch_bis_credit(country: str = "USA") -> Tuple[pd.DataFrame, List[DataIssue
 def fetch_cbo_projections() -> Tuple[pd.DataFrame, List[DataIssue]]:
     dataset = CBO_DATASETS["long_term_budget"]
     try:
-        df = pd.read_csv(io.BytesIO(get_bytes(dataset["url"], ttl=24 * 3600)))
-        df["date"] = df["date"].map(_fy_to_timestamp)
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        return df.dropna(subset=["value"]), []
+        df, fetched = get_document(dataset["url"], parser=lambda body: validation.cbo_csv(body, dataset["variables"]),
+                                   ttl=24 * 3600, max_age=CBO_CACHE_MAX_AGE)
+        df.attrs["observation_checked_at"] = pd.Timestamp(fetched, unit="s", tz="UTC").isoformat()
+        return df, []
     except Exception as exc:
         return pd.DataFrame(), [DataIssue(dataset["source"], _safe_error(exc))]
 
@@ -438,6 +420,7 @@ def treasury_daily_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "weight": weight,
                 "source": "US Treasury Fiscal Data",
                 "rationale": rationale,
+                **df.attrs,
             }
         )
 
@@ -456,6 +439,7 @@ def treasury_daily_metrics(df: pd.DataFrame) -> pd.DataFrame:
             "weight": 0.70,
             "source": "US Treasury Fiscal Data",
             "rationale": f"One-year growth is {growth_1y:.2f}%." if pd.notna(growth_1y) else "Short-term issuance pace.",
+            **df.attrs,
         }
     )
     return pd.DataFrame(rows)
@@ -512,6 +496,8 @@ def world_bank_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "weight": meta["weight"],
                 "source": meta["source"],
                 "rationale": "Annual cross-country comparable indicator.",
+                **({"observation_checked_at": sub["observation_checked_at"].iloc[-1]}
+                   if "observation_checked_at" in sub else {}),
             }
         )
     return pd.DataFrame(rows)
@@ -553,6 +539,8 @@ def bis_credit_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "weight": weight,
                 "source": "BIS Data Portal",
                 "rationale": rationale,
+                **({"observation_checked_at": sub["observation_checked_at"].iloc[-1]}
+                   if "observation_checked_at" in sub else {}),
             }
         )
     return pd.DataFrame(rows)
@@ -592,6 +580,7 @@ def cbo_projection_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "weight": meta["weight"],
                 "source": "CBO Open Data",
                 "rationale": "CBO February 2026 vintage; terminal structural value, not a current market shock.",
+                **df.attrs,
             }
         )
     return pd.DataFrame(rows)

@@ -11,11 +11,24 @@ import pandas as pd
 
 from catalog import CBO_DATASETS, FRED_SERIES, WORLD_BANK_INDICATORS
 
-FRESHNESS_POLICY_VERSION = "2"
+FRESHNESS_POLICY_VERSION = "3"
 PUBLICATION_WARNING_DAYS = 14
 PUBLICATION_MAX_AGE_DAYS = 120
-PUBLICATION_METADATA_TTL = 24 * 3600
+PUBLICATION_METADATA_TTL = 6 * 3600
+PUBLICATION_METADATA_MAX_AGE = 48 * 3600
 OBSERVATION_CACHE_TTL = 6 * 3600
+OBSERVATION_CACHE_MAX_AGE = 48 * 3600
+INSTITUTIONAL_CACHE_TTL = 24 * 3600
+INSTITUTIONAL_CACHE_MAX_AGE = 7 * 86400
+CBO_CACHE_MAX_AGE = 30 * 86400
+
+
+def cache_policy(bucket):
+    if bucket == "cbo_projection":
+        return INSTITUTIONAL_CACHE_TTL, CBO_CACHE_MAX_AGE
+    if bucket in {"world_bank", "global_credit"}:
+        return INSTITUTIONAL_CACHE_TTL, INSTITUTIONAL_CACHE_MAX_AGE
+    return OBSERVATION_CACHE_TTL, OBSERVATION_CACHE_MAX_AGE
 
 
 def utc_timestamp(value):
@@ -45,8 +58,8 @@ def quarterly_publication_deadline(row, now):
         return pd.NaT
     if not (period_end <= updated <= min(checked, retrieved) and max(checked, retrieved) <= now):
         return pd.NaT
-    if not (0 <= (now - checked).total_seconds() < PUBLICATION_METADATA_TTL
-            and 0 <= (now - retrieved).total_seconds() < OBSERVATION_CACHE_TTL):
+    if not (0 <= (now - checked).total_seconds() < PUBLICATION_METADATA_MAX_AGE
+            and 0 <= (now - retrieved).total_seconds() < OBSERVATION_CACHE_MAX_AGE):
         return pd.NaT
     return min(updated.normalize() + pd.Timedelta(days=PUBLICATION_MAX_AGE_DAYS + 1),
                period_end + pd.DateOffset(months=6) + pd.Timedelta(days=31))
@@ -107,8 +120,8 @@ def assess_metrics(metrics: pd.DataFrame, now=None) -> pd.DataFrame:
         if pd.notna(publication_deadline) and publication_deadline > expires:
             limit = publication_deadline
             expires = max(expires, min(publication_deadline,
-                          utc_timestamp(row["publication_checked_at"]) + pd.Timedelta(seconds=PUBLICATION_METADATA_TTL),
-                          utc_timestamp(row["observation_checked_at"]) + pd.Timedelta(seconds=OBSERVATION_CACHE_TTL)))
+                          utc_timestamp(row["publication_checked_at"]) + pd.Timedelta(seconds=PUBLICATION_METADATA_MAX_AGE),
+                          utc_timestamp(row["observation_checked_at"]) + pd.Timedelta(seconds=OBSERVATION_CACHE_MAX_AGE)))
         if sub.empty or row.get("quality") == "missing":
             status, detail = "missing", "Expected signal unavailable."
         elif row.get("quality") == "invalid":
@@ -135,9 +148,30 @@ def assess_metrics(metrics: pd.DataFrame, now=None) -> pd.DataFrame:
                 detail = ("Observation-age limit exceeded; no valid recent quarterly publication confirmation."
                           if meta["frequency"] == "quarterly_period_start"
                           else "Observation older than this frequency's tolerance.")
+        refresh_seconds, max_cache_age = cache_policy(bucket)
+        retrieved = utc_timestamp(row.get("observation_checked_at"))
+        cache_state = "unknown"
+        cache_expires = pd.NaT
+        # Raw in-memory metrics may be used by offline analysis. Provider readers always
+        # supply the retrieval timestamp; explicit missing/invalid provenance fails closed.
+        if not sub.empty and "observation_checked_at" in row:
+            if pd.isna(retrieved) or retrieved > instant:
+                status, detail, cache_state = "invalid", "Invalid source retrieval timestamp.", "invalid"
+            else:
+                cache_expires = retrieved + pd.Timedelta(seconds=max_cache_age)
+                expires = min(expires, cache_expires) if pd.notna(expires) else cache_expires
+                cache_state = "fresh" if (instant - retrieved).total_seconds() < refresh_seconds else "cached"
+                if instant >= cache_expires:
+                    status, detail, cache_state = "stale", "Validated source cache exceeded its maximum age.", "expired"
+        if status == "official_delayed":
+            checked = utc_timestamp(row.get("publication_checked_at"))
+            if (instant - checked).total_seconds() >= PUBLICATION_METADATA_TTL:
+                cache_state = "cached"
         row.update(quality=status, quality_detail=detail, observation_age_days=age if bucket != "cbo_projection" else None,
                    max_age_days=meta["max_age_days"], frequency=meta["frequency"],
                    freshness_basis=basis, freshness_expires_at=expires, freshness_limit_at=limit,
+                   cache_status=cache_state, cache_expires_at=cache_expires,
+                   cache_refresh_seconds=refresh_seconds, cache_max_age_seconds=max_cache_age,
                    eligible=status in {"ok", "projection", "official_delayed"})
         if not row["eligible"]:
             row["risk_score"] = np.nan

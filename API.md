@@ -48,13 +48,26 @@ Chaque signal contient notamment `bucket`, `series_id`, `name`, `source`, `unit`
 `date`, `current`, `signed_z`, `risk_score`, `quality`, `quality_detail`, `eligible`,
 `frequency`, `observation_age_days` et `max_age_days`.
 
-La politique de fraicheur `quality.policy_version = "2"` conserve le schema `1.2`
+La politique de fraicheur `quality.policy_version = "3"` conserve le schema `1.2`
 et la formule economique `2.0`. Un signal trimestriel `quality = "official_delayed"`
 est eligible seulement avec confirmation FRED recente et respect des bornes
 decrites dans `METHODOLOGY.md`. Ce n'est pas une observation du jour.
 `quality.delayed_signals` liste ces signaux, et `quality.expiring_signals` annonce
 leurs prochaines limites d'age (14 jours). Une publication differee ne doit etre
 presentee ni comme une panne de collecte ni comme une qualite nominale.
+
+`quality.status = "cached"` signale au moins une reponse reutilisee au-dela de sa
+cadence de renouvellement, mais dans sa limite maximale et son age economique admis.
+`quality.cached_signals` donne leurs identifiants. Le score exige toujours 31/31.
+`quality.cache_expiring_signals` liste `series_id` et `expires_at` pour les reponses
+reutilisees dont l'echeance effective arrive sous 24 heures, pour alerte avant rupture.
+Si une publication differee coexiste, `delayed_signals` reste renseigne ; une
+ineligibilite ou un flux absent donne priorite a `degraded`.
+Les consommateurs doivent afficher le recours au cache, pas une qualite nominale.
+Chaque signal expose `cache_status` (`fresh`, `cached`, `expired`, `invalid`, `unknown`),
+`cache_expires_at`, `cache_refresh_seconds`, `cache_max_age_seconds` et la collecte
+originale `observation_checked_at`. `refresh.source_ttl_seconds` reste la cadence ;
+`refresh.source_max_cache_age_seconds` donne les maxima. Voir le tableau de la methode.
 
 Les champs additionnels des signaux sont `freshness_basis`, `freshness_limit_at`
 (limite d'age), `freshness_expires_at` (echeance effective incluant les caches),

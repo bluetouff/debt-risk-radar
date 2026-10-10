@@ -99,11 +99,29 @@ Un CBO absent degrade l'audit global mais ne suspend pas le score courant comple
 
 Ces tolerances ne garantissent pas la derniere publication. Les dates des observations
 ne sont pas des dates de collecte. L'horizon CBO 2056 n'est pas une date de fraicheur.
-Le cache HTTP expire apres 6 h pour FRED/Treasury et 24 h pour BIS/CBO/World Bank,
-meme si la date d'observation reste admissible. Une panne peut donc encore suspendre
-le score institutionnel ; le retrait de Massive n'est pas une garantie de disponibilite absolue.
+La politique de fraicheur 3 separe deux delais reseau, comptes depuis la collecte
+initiale de chaque reponse validee :
 
-### Publications trimestrielles differees (politique de fraicheur 2)
+| Source | Cadence de renouvellement | Reutilisation maximale |
+| --- | ---: | ---: |
+| FRED et Treasury | 6 h | 48 h |
+| Metadonnees trimestrielles FRED | 6 h | 48 h |
+| BIS et World Bank | 24 h | 7 jours |
+| Millesime CBO fige | 24 h | 30 jours |
+
+Apres la cadence normale, la qualite globale porte `cached` et liste les signaux
+concernes. La reponse reste celle de sa collecte initiale : aucune date n'est
+rajeunie. Une publication plus recente peut ne pas encore avoir ete integree.
+La premiere limite atteinte, age economique ou reutilisation reseau, exclut le signal.
+Ce sont des tolerances de surveillance explicites, pas des garanties fournisseur.
+La formule, les poids et la couverture obligatoire 31/31 restent inchanges.
+
+Le diagnostic du 10 octobre a identifie deux echecs reseau World Bank consecutifs :
+le premier conservait le cache, le second le rejetait a son ancien seuil de 24 h.
+Cette politique remplace cette confusion entre cadence et expiration. Elle ne garantit
+pas une disponibilite absolue si la panne depasse les limites publiees.
+
+### Publications trimestrielles differees
 
 Le 9 octobre 2026, `GFDEGDQ188S` et `FYGFGDQ188S` ont franchi la limite de
 280 jours depuis le debut du T1 2026. FRED affichait toujours ce trimestre,
@@ -119,8 +137,9 @@ et exactement la derniere periode des observations collectees. La date FRED
 necessairement celle de sa premiere publication.
 
 Toutes ces conditions sont requises :
-- Observations collectees depuis moins de six heures, metadonnees depuis moins
-  de vingt-quatre heures ; lire le cache ne modifie jamais ces dates.
+- Observations et metadonnees collectees depuis moins de 48 heures ; au-dela de
+  six heures, leur reutilisation porte aussi la mention de cache. Lire le cache
+  ne modifie jamais ces dates.
 - Mise a jour FRED non future, posterieure a la fin du trimestre et anterieure
   aux deux collectes. Aucun trimestre plus recent annonce dans les metadonnees.
 - Au plus 120 jours calendaires depuis cette mise a jour (environ un cycle
@@ -138,7 +157,7 @@ La publication differee est visible dans le dashboard et dans les consommateurs
 l0g. Le JSON fournit les horodatages, les bornes et les signaux qui approchent
 de leur limite d'age sous quatorze jours. `valid_until` ne depasse pas la premiere
 echeance d'eligibilite d'un signal courant. Les metadonnees sont demandees seulement
-a l'approche du seuil (14 jours), avec cache 24 h, anticipation normale du cache
+a l'approche du seuil (14 jours), avec renouvellement 6 h, anticipation normale du cache
 et limitations fournisseur inchangees. Aucun appel n'est lance par le navigateur.
 
 Sources du diagnostic et du contrat :

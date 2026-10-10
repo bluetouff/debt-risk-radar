@@ -112,10 +112,15 @@ def _retry_after(value: str | None, now: float) -> float:
 class CachedResponse:
     body: bytes
     fetched_at: float
+    parsed: object = None
 
 
 def _get_response(url: str, *, params: dict | None = None, headers: dict | None = None,
-                  ttl: int, cache_key: str | None = None) -> CachedResponse:
+                  ttl: int, cache_key: str | None = None, max_age: int | None = None,
+                  validator=None) -> CachedResponse:
+    max_age = ttl if max_age is None else max_age
+    if not 0 < ttl <= max_age <= 31 * 86400:
+        raise DataUnavailable("Invalid source cache lifetime.")
     parts = urlsplit(url)
     if (parts.scheme != "https" or parts.hostname not in ALLOWED_HOSTS
             or parts.port not in (None, 443) or parts.username or parts.password
@@ -133,19 +138,32 @@ def _get_response(url: str, *, params: dict | None = None, headers: dict | None 
                 db.execute("BEGIN IMMEDIATE")
             now = time.time()
             cached = db.execute("SELECT fetched, body FROM responses WHERE key=?", (key,)).fetchone()
-            fresh = cached is not None and 0 <= now - cached[0] < ttl
-            # Renew before the next timer tick without extending the readers' TTL.
+            usable = cached is not None and 0 <= now - cached[0] < max_age
+            cached_response = None
+            if usable:
+                try:
+                    parsed = validator(bytes(cached[1])) if validator else None
+                    cached_response = CachedResponse(bytes(cached[1]), cached[0], parsed)
+                except Exception:
+                    # Old caches are revalidated too; malformed bodies are never a fallback.
+                    usable = False
+            now = time.time()
+            usable = usable and 0 <= now - cached[0] < max_age
+            fresh = usable and now - cached[0] < ttl
+            # Renew ahead of schedule; reuse never changes the original retrieval time.
             refresh_age = ttl - min(CACHE_REFRESH_WINDOW, ttl / 10)
             if fresh and (read_only() or now - cached[0] < refresh_age):
-                return CachedResponse(bytes(cached[1]), cached[0])
+                return cached_response
             if read_only():
+                if usable:
+                    return cached_response
                 raise DataUnavailable("Source cache missing or expired; awaiting scheduled collection.")
 
             host = parts.hostname
             state = db.execute("SELECT last_request, blocked_until FROM providers WHERE host=?", (host,)).fetchone()
             if state and state[1] > now:
-                if fresh:
-                    return CachedResponse(bytes(cached[1]), cached[0])
+                if usable:
+                    return cached_response
                 raise DataUnavailable("Provider temporarily paused after an upstream failure or rate limit.")
             interval = MASSIVE_REQUEST_INTERVAL if host == "api.massive.com" else 1.0
             if state:
@@ -160,6 +178,8 @@ def _get_response(url: str, *, params: dict | None = None, headers: dict | None 
                     if response.status_code != 200:
                         failure_reason = "authorization" if response.status_code in (401, 403) else "http_error"
                         cooldown = AUTH_COOLDOWN if response.status_code in (401, 403) else FAILURE_COOLDOWN
+                        if response.headers.get("Retry-After"):
+                            cooldown = max(cooldown, _retry_after(response.headers["Retry-After"], time.time()))
                         if response.status_code == 429:
                             failure_reason = "rate_limit"
                             prior = db.execute("SELECT failures FROM rate_limits WHERE host=?", (host,)).fetchone()
@@ -187,10 +207,21 @@ def _get_response(url: str, *, params: dict | None = None, headers: dict | None 
                         secrets.append(authorization[7:])
                     if any(secret.encode() in body for secret in secrets if secret):
                         raise DataUnavailable("Upstream response unexpectedly contains credentials; discarded.")
+                    try:
+                        parsed = validator(body) if validator else None
+                    except Exception:
+                        # Domain validation runs before commit. Never log the rejected body.
+                        raise DataUnavailable("Upstream response failed validation; previous cache preserved.") from None
             except (requests.RequestException, DataUnavailable) as exc:
                 error = str(exc) if isinstance(exc, DataUnavailable) else "Upstream request failed; provider requests paused."
                 if isinstance(exc, requests.RequestException):
                     failure_reason = "network_error"
+                if failure_reason != "rate_limit":
+                    prior = db.execute("SELECT failures FROM rate_limits WHERE host=?", (host,)).fetchone()
+                    failures = min(6, max(0, prior[0] if prior else 0) + 1)
+                    db.execute("INSERT OR REPLACE INTO rate_limits VALUES (?, ?)", (host, failures))
+                    backoff = min(MAX_RATE_LIMIT_COOLDOWN, FAILURE_COOLDOWN * 2 ** (failures - 1))
+                    blocked_until = max(blocked_until, time.time() + backoff)
                 blocked_until = max(blocked_until, time.time() + FAILURE_COOLDOWN)
             db.execute("INSERT OR REPLACE INTO providers VALUES (?, ?, ?)", (host, time.time(), blocked_until))
             if error is None:
@@ -204,14 +235,14 @@ def _get_response(url: str, *, params: dict | None = None, headers: dict | None 
             if error:
                 # A failed renewal must not discard a still-valid response. Recheck
                 # after the request: a timeout may have crossed its hard expiry.
-                still_fresh = cached is not None and 0 <= time.time() - cached[0] < ttl
+                still_fresh = usable and 0 <= time.time() - cached[0] < max_age
                 logger.warning("Provider refresh deferred: source=%s reason=%s retry_at_epoch=%s cache_valid=%s",
                                PROVIDER_LABELS[host], failure_reason,
                                blocked_until, still_fresh)
                 if still_fresh:
-                    return CachedResponse(bytes(cached[1]), cached[0])
+                    return cached_response
                 raise DataUnavailable(error)
-            return CachedResponse(body, fetched_at)
+            return CachedResponse(body, fetched_at, parsed)
     except (sqlite3.Error, OSError) as exc:
         raise DataUnavailable("Persistent source cache unavailable; no uncached request attempted.") from exc
 
@@ -222,11 +253,24 @@ def get_bytes(url: str, **kwargs) -> bytes:
 
 def get_json_document(url: str, **kwargs):
     """Return the original retrieval time, never the time a cache is read."""
-    response = _get_response(url, **kwargs)
-    try:
-        return json.loads(response.body), response.fetched_at
-    except (ValueError, UnicodeError) as exc:
-        raise DataUnavailable("Invalid upstream JSON payload.") from exc
+    validate = kwargs.pop("validator", None)
+
+    def parse(body):
+        def reject_constant(value):
+            raise ValueError("Non-finite JSON number")
+        payload = json.loads(body, parse_constant=reject_constant)
+        if validate:
+            validate(payload)
+        return payload
+
+    response = _get_response(url, validator=parse, **kwargs)
+    return response.parsed, response.fetched_at
+
+
+def get_document(url: str, *, parser, **kwargs):
+    """Parse and validate bytes before atomically replacing the last usable response."""
+    response = _get_response(url, validator=parser, **kwargs)
+    return response.parsed, response.fetched_at
 
 
 def get_json(url: str, **kwargs):
