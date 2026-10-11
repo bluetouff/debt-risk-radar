@@ -23,6 +23,8 @@ L'interface reprend la charte de [l0g.fr](https://l0g.fr/) : fond near-black,
 typographie JetBrains Mono, textes gris clair et accents turquoise, rose et ambre.
 Le logo et le lien de retour vers l0g.fr restent visibles en haut du radar et de
 la FAQ. Le pied de page donne aussi acces a l'ensemble des dashboards.
+Le favicon officiel l0g est embarque dans `assets/favicon.png`, sans emoji
+ni requete vers un fournisseur externe.
 
 Les styles se trouvent dans `assets/theme.css`. La police latine variable est
 embarquee localement, sans appel a un service de polices externe. Elle provient

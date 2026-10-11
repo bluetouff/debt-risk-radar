@@ -92,14 +92,14 @@ def install_auto_refresh(seconds: int = AUTO_REFRESH_SECONDS) -> None:
     )
 
 
+assets = Path(__file__).resolve().parent / "assets"
 st.set_page_config(
     page_title="Debt Risk Radar",
-    page_icon=":bar_chart:",
+    page_icon=assets / "favicon.png",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-assets = Path(__file__).resolve().parent / "assets"
 font_data = b64encode((assets / "fonts/jetbrains-mono-latin.woff2").read_bytes()).decode("ascii")
 styles = (assets / "theme.css").read_text(encoding="utf-8")
 st.markdown("<style>" + styles.replace("__L0G_FONT__", font_data) + "</style>", unsafe_allow_html=True)

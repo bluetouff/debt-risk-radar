@@ -145,13 +145,21 @@ class InstitutionalMethodTests(unittest.TestCase):
             self.assertEqual(json.loads(target.read_text()), payload)
 
     def test_dashboard_and_faq_render_without_retired_connector(self):
+        import streamlit as st
+        from PIL import Image
         from streamlit.testing.v1 import AppTest
 
+        with Image.open(ROOT / "assets/favicon.png") as icon:
+            self.assertEqual(icon.format, "PNG")
+            self.assertEqual(icon.size, (32, 32))
+            icon.verify()
+        page_config = self.stack.enter_context(patch("streamlit.set_page_config", wraps=st.set_page_config))
         with tempfile.TemporaryDirectory() as directory:
             self.seed_pauses(directory)
             self.mock_feeds("data")
             app = AppTest.from_file(str(ROOT / "app.py")).run(timeout=20)
             self.assertEqual(len(app.exception), 0)
+            self.assertEqual(page_config.call_args.kwargs["page_icon"], ROOT / "assets/favicon.png")
             markup = "\n".join(item.value for item in app.markdown)
             self.assertIn("Méthode 2.0", markup)
             self.assertIn("Taux / crédit", markup)
@@ -171,6 +179,7 @@ class InstitutionalMethodTests(unittest.TestCase):
             app.query_params["view"] = "faq"
             app.run(timeout=20)
             self.assertEqual(len(app.exception), 0)
+            self.assertEqual(page_config.call_args.kwargs["page_icon"], ROOT / "assets/favicon.png")
             markup = "\n".join(item.value for item in app.markdown)
             self.assertIn("31 signaux", markup)
             self.assertIn("rompt la comparabilité", markup)
