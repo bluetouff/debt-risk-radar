@@ -17,6 +17,18 @@ et [API.md](API.md).
 Documentation : [methode et poids](METHODOLOGY.md), [contrat JSON](API.md),
 [deploiement et migration](DEPLOYMENT.md), [securite](SECURITY.md).
 
+## Interface l0g
+
+L'interface reprend la charte de [l0g.fr](https://l0g.fr/) : fond near-black,
+typographie JetBrains Mono, textes gris clair et accents turquoise, rose et ambre.
+Le logo et le lien de retour vers l0g.fr restent visibles en haut du radar et de
+la FAQ. Le pied de page donne aussi acces a l'ensemble des dashboards.
+
+Les styles se trouvent dans `assets/theme.css`. La police latine variable est
+embarquee localement, sans appel a un service de polices externe. Elle provient
+de `@fontsource-variable/jetbrains-mono` 5.3.0 ; sa licence SIL Open Font License
+est conservee dans `assets/fonts/OFL.txt`. Le code de l'application reste sous MIT.
+
 ## Signaux suivis
 
 - Dette publique US quotidienne via Treasury Fiscal Data.

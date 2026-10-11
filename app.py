@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import html
 import os
+from base64 import b64encode
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -97,360 +99,21 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown(
-    """
-<style>
-    :root {
-        --bg: #1a1a1a;
-        --panel: #202020;
-        --panel2: #171717;
-        --line: rgba(0, 240, 208, 0.16);
-        --line-soft: rgba(255, 255, 255, 0.10);
-        --text: #b8fff5;
-        --paper: #e7e9ee;
-        --bright: #f5f6f8;
-        --dim: #6f9b94;
-        --faint: #456b65;
-        --usd: #00f0d0;
-        --teal: #5eead4;
-        --yen: #ff6b9d;
-        --rose: #ff4d87;
-        --gold: #f5b13d;
-        --orange: #ff8a3d;
-        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    }
-    .stApp {
-        background: radial-gradient(1100px 520px at 50% -8%, rgba(94, 234, 212, 0.05), transparent 62%), var(--bg);
-        color: var(--text);
-        font-family: var(--mono);
-    }
-    .stApp::after {
-        content: "";
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        z-index: 9999;
-        background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.08) 3px);
-        mix-blend-mode: multiply;
-        opacity: .42;
-    }
-    .block-container { padding-top: 1.2rem; max-width: 1220px; }
-    h1, h2, h3 {
-        color: var(--bright);
-        letter-spacing: 0;
-        font-family: var(--mono);
-    }
-    h1 {
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 0.45rem;
-        text-shadow: 0 0 30px rgba(94, 234, 212, 0.18);
-    }
-    h2 {
-        color: var(--dim);
-        font-size: 0.92rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-    }
-    h2::before {
-        content: "";
-        display: inline-block;
-        width: 18px;
-        height: 2px;
-        margin-right: 10px;
-        vertical-align: middle;
-        background: var(--yen);
-    }
-    div[data-testid="stSidebar"] {
-        background: #171717;
-        border-right: 1px solid var(--line);
-    }
-    div[data-testid="stSidebar"] label, div[data-testid="stSidebar"] p {
-        color: var(--dim);
-        font-family: var(--mono);
-    }
-    .tape {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 12px 22px;
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 14px;
-        margin-bottom: 20px;
-    }
-    .brand {
-        color: var(--bright);
-        font-size: 1.15rem;
-        font-weight: 800;
-    }
-    .brand b { color: var(--yen); }
-    .tagline {
-        color: var(--dim);
-        font-size: 0.72rem;
-        letter-spacing: 0.03em;
-    }
-    .status-pill {
-        margin-left: auto;
-        color: var(--dim);
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 4px 10px;
-        font-size: 0.7rem;
-        display: flex;
-        gap: 8px;
-        align-items: center;
-    }
-    .status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--usd);
-        box-shadow: 0 0 0 0 rgba(0,240,208,.55);
-    }
-    .top-nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-left: auto;
-        align-items: center;
-    }
-    .nav-link {
-        color: var(--dim) !important;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 4px 10px;
-        font-size: 0.7rem;
-        text-decoration: none !important;
-    }
-    .nav-link:hover, .nav-link.active {
-        color: var(--bright) !important;
-        border-color: rgba(94, 234, 212, 0.65);
-        background: rgba(94, 234, 212, 0.06);
-    }
-    .kpi-grid {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 1px;
-        background: var(--line);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        overflow: hidden;
-        margin: 18px 0 16px;
-    }
-    .metric-card {
-        background: var(--panel);
-        border: 0;
-        border-left: 3px solid var(--usd);
-        border-radius: 0;
-        padding: 15px 15px 13px;
-        min-height: 112px;
-    }
-    .metric-label {
-        color: var(--dim);
-        text-transform: uppercase;
-        font-size: 0.66rem;
-        letter-spacing: 0.07em;
-        margin-bottom: 4px;
-    }
-    .metric-value {
-        font-family: var(--mono);
-        font-weight: 700;
-        font-size: 1.85rem;
-        line-height: 1.15;
-        font-variant-numeric: tabular-nums;
-    }
-    .metric-sub {
-        color: var(--dim);
-        font-size: 0.76rem;
-        margin-top: 8px;
-        line-height: 1.35;
-    }
-    .help-card {
-        background: rgba(255, 255, 255, 0.018);
-        border: 1px solid var(--line);
-        border-left: 2px solid var(--teal);
-        border-radius: 10px;
-        padding: 13px 15px;
-        color: var(--dim);
-        font-size: 0.82rem;
-        line-height: 1.55;
-        margin: 8px 0 14px;
-    }
-    .help-card strong { color: var(--paper); }
-    .faq-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-        margin: 10px 0 18px;
-    }
-    .faq-card {
-        background: rgba(255, 255, 255, 0.018);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 14px 15px;
-        min-height: 128px;
-        color: var(--dim);
-        font-size: 0.82rem;
-        line-height: 1.52;
-    }
-    .faq-card strong {
-        color: var(--paper);
-        display: block;
-        margin-bottom: 6px;
-    }
-    .compact-wrap {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        overflow: hidden;
-        background: var(--panel);
-    }
-    .detail-item {
-        border-bottom: 1px solid var(--line-soft);
-        padding: 9px 2px;
-        color: var(--dim);
-        font-size: 0.82rem;
-        line-height: 1.45;
-    }
-    .detail-item strong { color: var(--paper); }
-    .detail-meta {
-        color: var(--faint);
-        font-size: 0.72rem;
-        margin-top: 4px;
-    }
-    .risk-table {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        overflow: hidden;
-        background: var(--panel2);
-        margin-top: 14px;
-    }
-    .risk-row {
-        display: grid;
-        grid-template-columns: minmax(132px, .95fr) minmax(260px, 2.05fr) minmax(96px, .55fr) minmax(84px, .45fr) minmax(126px, .7fr);
-        border-top: 1px solid var(--line-soft);
-        align-items: stretch;
-    }
-    .risk-row:first-child { border-top: 0; }
-    .risk-head {
-        background: rgba(122, 162, 247, 0.08);
-        color: var(--dim);
-        text-transform: uppercase;
-        font-size: 0.68rem;
-        letter-spacing: 0.07em;
-    }
-    .risk-cell {
-        min-width: 0;
-        padding: 10px 12px;
-        border-left: 1px solid var(--line-soft);
-        overflow-wrap: anywhere;
-        word-break: normal;
-        color: var(--text);
-        font-size: 0.84rem;
-        line-height: 1.35;
-        font-variant-numeric: tabular-nums;
-    }
-    .risk-cell:first-child { border-left: 0; }
-    .risk-family { color: var(--paper); font-weight: 700; }
-    .risk-muted { color: var(--dim); }
-    .risk-score {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        align-items: center;
-        gap: 10px;
-    }
-    .risk-bar {
-        height: 8px;
-        border-radius: 999px;
-        overflow: hidden;
-        background: rgba(255, 255, 255, 0.10);
-    }
-    .risk-bar span {
-        display: block;
-        height: 100%;
-        border-radius: inherit;
-        background: var(--teal);
-        box-shadow: 0 0 12px rgba(94, 234, 212, 0.3);
-    }
-    div[data-testid="stDataFrame"] {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        overflow: hidden;
-    }
-    div[data-testid="stDataFrame"] * {
-        font-family: var(--mono) !important;
-    }
-    .stAlert {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-    }
-    .site-footer {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin-top: 34px;
-        padding: 18px 0 6px;
-        border-top: 1px solid var(--line);
-        color: var(--faint);
-        font-size: 0.72rem;
-    }
-    .l0g-logo {
-        display: inline-flex;
-        align-items: baseline;
-        gap: 2px;
-        color: var(--bright) !important;
-        font-weight: 800;
-        text-decoration: none !important;
-        letter-spacing: 0;
-    }
-    .l0g-logo .slash {
-        color: var(--teal);
-    }
-    .l0g-logo:hover {
-        color: var(--teal) !important;
-    }
-    footer { visibility: hidden; }
-    #MainMenu { visibility: hidden; }
-    @media (max-width: 1180px) {
-        .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .faq-grid { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 720px) {
-        .kpi-grid { grid-template-columns: 1fr; }
-        .status-pill { margin-left: 0; }
-        .risk-head { display: none; }
-        .risk-row {
-            grid-template-columns: 1fr;
-            padding: 8px 0;
-        }
-        .risk-cell {
-            border-left: 0;
-            display: grid;
-            grid-template-columns: 94px minmax(0, 1fr);
-            gap: 10px;
-            padding: 5px 12px;
-        }
-        .risk-cell::before {
-            content: attr(data-label);
-            color: var(--dim);
-            text-transform: uppercase;
-            font-size: 0.66rem;
-            letter-spacing: 0.06em;
-        }
-    }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+assets = Path(__file__).resolve().parent / "assets"
+font_data = b64encode((assets / "fonts/jetbrains-mono-latin.woff2").read_bytes()).decode("ascii")
+styles = (assets / "theme.css").read_text(encoding="utf-8")
+st.markdown("<style>" + styles.replace("__L0G_FONT__", font_data) + "</style>", unsafe_allow_html=True)
 
 
 def metric_card(label: str, value: str, sub: str, color: str) -> str:
+    if value == "N/D":
+        color = "#8b909b"
     label = html.escape(label)
     value = html.escape(value)
     sub = html.escape(sub)
     color = html.escape(color)
     return f"""
-    <div class="metric-card" style="border-left-color: {color};">
+    <div class="metric-card" style="--metric-color: {color};">
         <div class="metric-label">{label}</div>
         <div class="metric-value" style="color: {color};">{value}</div>
         <div class="metric-sub">{sub}</div>
@@ -492,7 +155,7 @@ def risk_table_html(table: pd.DataFrame, limit: int = 16) -> str:
             f'<div class="risk-cell risk-muted" data-label="unite">{html.escape(str(row["unit"]))}</div>'
             '<div class="risk-cell" data-label="risque">'
             '<div class="risk-score">'
-            f'<div class="risk-bar"><span style="width:{width:.0f}%"></span></div>'
+            f'<div class="risk-bar"><span style="width:{width:.0f}%;background:{score_color(risk_score)}"></span></div>'
             f"<strong>{score_text}</strong>"
             "</div>"
             "</div>"
@@ -505,13 +168,14 @@ def chart_layout(fig: go.Figure, title: str, height: int = 360, yaxis_title: str
     fig.update_layout(
         title=title,
         height=height,
-        margin=dict(l=10, r=10, t=42, b=10),
-        paper_bgcolor="#1a1a1a",
-        plot_bgcolor="#1a1a1a",
-        font=dict(color="#b8fff5", family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"),
-        legend=dict(orientation="h"),
-        xaxis=dict(gridcolor="rgba(0,240,208,0.08)", zerolinecolor="rgba(0,240,208,0.18)"),
-        yaxis=dict(gridcolor="rgba(0,240,208,0.08)", zerolinecolor="rgba(0,240,208,0.18)"),
+        margin=dict(l=10, r=18, t=56, b=32),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e7e9ee", family="JetBrains Mono, ui-monospace, monospace", size=12),
+        title_font=dict(size=15, color="#f5f6f8"),
+        legend=dict(orientation="h", font=dict(size=11)),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.16)", tickfont=dict(color="#8b909b")),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.16)", tickfont=dict(color="#8b909b")),
     )
     if yaxis_title:
         fig.update_yaxes(title_text=yaxis_title)
@@ -521,17 +185,27 @@ def chart_layout(fig: go.Figure, title: str, height: int = 360, yaxis_title: str
 def render_header(view: str) -> None:
     radar_active = "active" if view == "radar" else ""
     faq_active = "active" if view == "faq" else ""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    radar_current = 'aria-current="page"' if view == "radar" else ""
+    faq_current = 'aria-current="page"' if view == "faq" else ""
     st.markdown(
         f"""
-        <header class="tape">
-            <div class="brand"><b>Debt</b> Risk <b>Radar</b></div>
-            <div class="tagline">USA · dette souveraine · credit gap · stress de marche</div>
+        <header class="site-header">
+            <div class="network-bar">
+                <a class="l0g-logo" href="https://l0g.fr/" target="_self" aria-label="l0g.fr, accueil">
+                    <span>l</span><span class="logo-zero">0</span><span>g</span><span class="logo-cursor" aria-hidden="true">_</span>
+                </a>
+                <a class="home-link" href="https://l0g.fr/" target="_self">Retour à l0g.fr <span aria-hidden="true">↗</span></a>
+            </div>
+            <div class="dashboard-heading">
+                <span class="scope-label">// DETTE US</span>
+                <h1>Debt Risk Radar</h1>
+                <p class="tagline">Dette souveraine · crédit privé · tensions de marché</p>
+            </div>
             <nav class="top-nav" aria-label="Navigation">
-                <a class="nav-link {radar_active}" href="?">Radar</a>
-                <a class="nav-link {faq_active}" href="?view=faq">Aide / FAQ</a>
+                <a class="nav-link {radar_active}" href="?" target="_self" {radar_current}>Radar</a>
+                <a class="nav-link {faq_active}" href="?view=faq" target="_self" {faq_current}>Aide / FAQ</a>
+                <a class="nav-link methodology-link" href="https://l0g.fr/methodologie/debt-risk-radar/" target="_self">Méthodologie <span aria-hidden="true">↗</span></a>
             </nav>
-            <div class="status-pill"><span class="status-dot"></span>{timestamp}</div>
         </header>
         """,
         unsafe_allow_html=True,
@@ -541,12 +215,18 @@ def render_header(view: str) -> None:
 def render_site_footer() -> None:
     st.markdown(
         """
-        <div class="site-footer">
-          <a class="l0g-logo" href="https://l0g.fr" target="_blank" rel="noopener" aria-label="l0g.fr">
-            <span class="slash">//</span><span>l0g.fr</span>
-          </a>
-          <span>Debt Risk Radar · MIT License</span>
-        </div>
+        <footer class="site-footer" aria-label="Pied de page Debt Risk Radar">
+          <div class="footer-brand">
+            <a class="l0g-logo" href="https://l0g.fr/" target="_self" aria-label="l0g.fr, accueil">
+              <span>l</span><span class="logo-zero">0</span><span>g</span><span class="logo-cursor" aria-hidden="true">_</span>
+            </a>
+            <span>Debt Risk Radar · MIT License</span>
+          </div>
+          <nav class="footer-nav" aria-label="L’écosystème l0g">
+            <a href="https://l0g.fr/" target="_self">l0g.fr <span aria-hidden="true">↗</span></a>
+            <a href="https://l0g.fr/dashboards/" target="_self">Tous les dashboards</a>
+          </nav>
+        </footer>
         """,
         unsafe_allow_html=True,
     )
@@ -894,8 +574,8 @@ if not metrics["eligible"].any():
 bucket_view = buckets.copy()
 bucket_view["role"] = np.where(bucket_view["bucket"].isin(STRUCTURAL_BUCKETS), "structurel", "courant")
 bucket_view["bucket_label"] = bucket_view["bucket"].map(BUCKET_LABELS).fillna(bucket_view["bucket"])
-bucket_view.loc[bucket_view["role"] == "structurel", "bucket_label"] += " (structurel)"
-bucket_view["bucket_label"] += " (" + bucket_view["n"].astype(str) + "/" + bucket_view["expected"].astype(str) + ")"
+bucket_view["bucket_label"] += "<br>" + bucket_view["n"].astype(str) + "/" + bucket_view["expected"].astype(str) + " signaux"
+bucket_view.loc[bucket_view["role"] == "structurel", "bucket_label"] += " · structurel"
 fig_bucket = go.Figure(
     go.Bar(
         x=round(bucket_view["score"], 1),
@@ -903,19 +583,18 @@ fig_bucket = go.Figure(
         orientation="h",
         marker=dict(color=[score_color(v) for v in bucket_view["score"]]),
         text=[f"{v:.1f}" if pd.notna(v) else "N/D" for v in bucket_view["score"]],
-        textposition="outside",
+        textposition=["inside" if pd.notna(v) and v >= 75 else "outside" for v in bucket_view["score"]],
+        insidetextanchor="end",
     )
 )
 fig_bucket.add_vline(x=WATCH_LEVEL, line_width=1, line_dash="dot", line_color="#f5b13d")
 fig_bucket.add_vline(x=STRESS_LEVEL, line_width=1, line_dash="dot", line_color="#ff4d87")
+chart_layout(fig_bucket, "", height=390)
 fig_bucket.update_layout(
     height=390,
     xaxis=dict(range=[0, 100], title="Risk score"),
     yaxis=dict(autorange="reversed"),
-    margin=dict(l=10, r=24, t=20, b=10),
-    paper_bgcolor="#1a1a1a",
-    plot_bgcolor="#1a1a1a",
-    font=dict(color="#b8fff5"),
+    margin=dict(l=10, r=24, t=42, b=10),
 )
 st.plotly_chart(fig_bucket, width="stretch")
 

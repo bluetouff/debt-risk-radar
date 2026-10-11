@@ -155,6 +155,12 @@ class InstitutionalMethodTests(unittest.TestCase):
             markup = "\n".join(item.value for item in app.markdown)
             self.assertIn("Méthode 2.0", markup)
             self.assertIn("Taux / crédit", markup)
+            self.assertIn('class="network-bar"', markup)
+            self.assertIn('href="https://l0g.fr/" target="_self">Retour à l0g.fr', markup)
+            self.assertIn('data:font/woff2;base64,', markup)
+            self.assertNotIn('__L0G_FONT__', markup)
+            self.assertIn('class="site-footer"', markup)
+            self.assertIn('href="https://l0g.fr/dashboards/" target="_self"', markup)
             self.assertFalse(any("Qualité des données" in item.value for item in app.warning))
             charts = [json.loads(chart.proto.spec) for chart in app.get("plotly_chart")]
             market = next(chart for chart in charts if "FRED" in chart["layout"].get("title", {}).get("text", ""))
@@ -168,6 +174,8 @@ class InstitutionalMethodTests(unittest.TestCase):
             markup = "\n".join(item.value for item in app.markdown)
             self.assertIn("31 signaux", markup)
             self.assertIn("rompt la comparabilité", markup)
+            self.assertIn('href="https://l0g.fr/" target="_self">Retour à l0g.fr', markup)
+            self.assertIn('target="_self" aria-current="page">Aide / FAQ', markup)
 
     def test_dashboard_explains_confirmed_delayed_publication_without_calling_it_unavailable(self):
         from streamlit.testing.v1 import AppTest
