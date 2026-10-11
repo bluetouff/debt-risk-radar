@@ -164,6 +164,9 @@ class InstitutionalMethodTests(unittest.TestCase):
             self.assertIn("Méthode 2.0", markup)
             self.assertIn("Taux / crédit", markup)
             self.assertIn('class="network-bar"', markup)
+            self.assertIn('[data-testid="stHeader"]::before', markup)
+            self.assertIn('background: linear-gradient(90deg, var(--teal), var(--rose), var(--gold));', markup)
+            self.assertNotIn('border-top: 2px solid var(--teal);', markup)
             self.assertIn('href="https://l0g.fr/" target="_self">Retour à l0g.fr', markup)
             self.assertIn('data:font/woff2;base64,', markup)
             self.assertNotIn('__L0G_FONT__', markup)
@@ -183,6 +186,8 @@ class InstitutionalMethodTests(unittest.TestCase):
             markup = "\n".join(item.value for item in app.markdown)
             self.assertIn("31 signaux", markup)
             self.assertIn("rompt la comparabilité", markup)
+            self.assertIn('[data-testid="stHeader"]::before', markup)
+            self.assertIn('background: linear-gradient(90deg, var(--teal), var(--rose), var(--gold));', markup)
             self.assertIn('href="https://l0g.fr/" target="_self">Retour à l0g.fr', markup)
             self.assertIn('target="_self" aria-current="page">Aide / FAQ', markup)
 

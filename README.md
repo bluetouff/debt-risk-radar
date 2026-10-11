@@ -21,6 +21,8 @@ Documentation : [methode et poids](METHODOLOGY.md), [contrat JSON](API.md),
 
 L'interface reprend la charte de [l0g.fr](https://l0g.fr/) : fond near-black,
 typographie JetBrains Mono, textes gris clair et accents turquoise, rose et ambre.
+Le liseret de 2 px en haut de page reprend le degrade turquoise, rose et ambre
+du [Yen Carry Monitor](https://yct.l0g.fr/), sur toute la largeur de l'ecran.
 Le logo et le lien de retour vers l0g.fr restent visibles en haut du radar et de
 la FAQ. Le pied de page donne aussi acces a l'ensemble des dashboards.
 Le favicon officiel l0g est embarque dans `assets/favicon.png`, sans emoji

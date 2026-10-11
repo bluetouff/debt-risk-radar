@@ -41,6 +41,16 @@
     outline-offset: 4px;
 }
 [data-testid="stHeader"] { background: var(--bg); }
+[data-testid="stHeader"]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, var(--teal), var(--rose), var(--gold));
+    pointer-events: none;
+}
 .block-container {
     max-width: 1220px;
     padding: 3.5rem 2rem 3rem;
@@ -72,7 +82,6 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    border-top: 2px solid var(--teal);
     border-bottom: 1px solid var(--line);
     padding: 1rem 0;
 }
