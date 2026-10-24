@@ -11,9 +11,9 @@ import pandas as pd
 
 from catalog import CBO_DATASETS, FRED_SERIES, WORLD_BANK_INDICATORS
 
-FRESHNESS_POLICY_VERSION = "3"
+FRESHNESS_POLICY_VERSION = "4"
 PUBLICATION_WARNING_DAYS = 14
-PUBLICATION_MAX_AGE_DAYS = 120
+PUBLICATION_MAX_AGE_DAYS = 240
 PUBLICATION_METADATA_TTL = 6 * 3600
 PUBLICATION_METADATA_MAX_AGE = 48 * 3600
 OBSERVATION_CACHE_TTL = 6 * 3600
@@ -61,8 +61,24 @@ def quarterly_publication_deadline(row, now):
     if not (0 <= (now - checked).total_seconds() < PUBLICATION_METADATA_MAX_AGE
             and 0 <= (now - retrieved).total_seconds() < OBSERVATION_CACHE_MAX_AGE):
         return pd.NaT
-    return min(updated.normalize() + pd.Timedelta(days=PUBLICATION_MAX_AGE_DAYS + 1),
-               period_end + pd.DateOffset(months=6) + pd.Timedelta(days=31))
+    period_limit = period_end + pd.DateOffset(years=1) + pd.Timedelta(days=1)
+    baseline = min(updated.normalize() + pd.Timedelta(days=PUBLICATION_MAX_AGE_DAYS + 1), period_limit)
+    release_id = FRED_SERIES.get(row.get("bucket"), {}).get(row.get("series_id"), {}).get("release_id")
+    calendar_checked = utc_timestamp(row.get("publication_calendar_checked_at"))
+    scheduled = utc_timestamp(row.get("publication_next_release"))
+    if pd.notna(calendar_checked) or pd.notna(scheduled):
+        if (release_id is None or row.get("publication_release_id") != release_id
+                or pd.isna(calendar_checked) or pd.isna(scheduled)
+                or not 0 <= (now - calendar_checked).total_seconds() < PUBLICATION_METADATA_MAX_AGE):
+            return pd.NaT
+        checked_day = pd.Timestamp(calendar_checked.tz_convert("America/Chicago").date(), tz="UTC")
+        if scheduled != scheduled.normalize() or not checked_day <= scheduled <= checked_day + pd.Timedelta(days=120):
+            return pd.NaT
+        # Calendar dates are US Central. Allow the release day and the following
+        # day for FRED integration; neither this check nor a revision redates Q1.
+        delivery_limit = scheduled.tz_localize(None).tz_localize("America/Chicago") + pd.DateOffset(days=2)
+        return min(max(baseline, delivery_limit.tz_convert("UTC")), period_limit)
+    return baseline
 
 
 def expected_metrics() -> dict[tuple[str, str], dict]:
@@ -122,6 +138,9 @@ def assess_metrics(metrics: pd.DataFrame, now=None) -> pd.DataFrame:
             expires = max(expires, min(publication_deadline,
                           utc_timestamp(row["publication_checked_at"]) + pd.Timedelta(seconds=PUBLICATION_METADATA_MAX_AGE),
                           utc_timestamp(row["observation_checked_at"]) + pd.Timedelta(seconds=OBSERVATION_CACHE_MAX_AGE)))
+            calendar_checked = utc_timestamp(row.get("publication_calendar_checked_at"))
+            if pd.notna(calendar_checked):
+                expires = min(expires, calendar_checked + pd.Timedelta(seconds=PUBLICATION_METADATA_MAX_AGE))
         if sub.empty or row.get("quality") == "missing":
             status, detail = "missing", "Expected signal unavailable."
         elif row.get("quality") == "invalid":
@@ -132,22 +151,25 @@ def assess_metrics(metrics: pd.DataFrame, now=None) -> pd.DataFrame:
             status, detail = "invalid", "Invalid observation value or date."
         elif bucket != "cbo_projection" and age < 0:
             status, detail = "invalid", "Future observation date."
-        elif not np.isfinite(row["risk_score"]):
-            status, detail = "unscored", "Insufficient valid history or zero variance."
-        elif not 0 <= row["risk_score"] <= 100 or not np.isfinite(row["weight"]) or row["weight"] <= 0:
+        elif (np.isfinite(row["risk_score"]) and not 0 <= row["risk_score"] <= 100
+              or not np.isfinite(row["weight"]) or row["weight"] <= 0):
             status, detail = "invalid", "Invalid score or weight."
         elif bucket == "cbo_projection":
             status, detail = "projection", "Pinned CBO February 2026 vintage; date is the projection horizon."
         elif meta["max_age_days"] is not None and age > meta["max_age_days"]:
             if pd.notna(publication_deadline) and instant < publication_deadline:
-                status, basis = "official_delayed", "verified_quarterly_publication"
+                status = "official_delayed"
+                basis = ("verified_release_calendar" if pd.notna(utc_timestamp(row.get("publication_next_release")))
+                         else "verified_quarterly_publication")
                 detail = ("Latest quarterly observation confirmed by FRED metadata; publication delayed. "
-                          "Original period retained. Bounded by publication age, period age and cache expiry.")
+                          "Original period retained. Official release calendar used when available; evidence and period bounds apply.")
             else:
                 status = "stale"
                 detail = ("Observation-age limit exceeded; no valid recent quarterly publication confirmation."
                           if meta["frequency"] == "quarterly_period_start"
                           else "Observation older than this frequency's tolerance.")
+        if status in {"ok", "official_delayed", "projection"} and not np.isfinite(row["risk_score"]):
+            status, detail = "unscored", "Insufficient valid history or zero variance."
         refresh_seconds, max_cache_age = cache_policy(bucket)
         retrieved = utc_timestamp(row.get("observation_checked_at"))
         cache_state = "unknown"
@@ -165,7 +187,9 @@ def assess_metrics(metrics: pd.DataFrame, now=None) -> pd.DataFrame:
                     status, detail, cache_state = "stale", "Validated source cache exceeded its maximum age.", "expired"
         if status == "official_delayed":
             checked = utc_timestamp(row.get("publication_checked_at"))
-            if (instant - checked).total_seconds() >= PUBLICATION_METADATA_TTL:
+            calendar_checked = utc_timestamp(row.get("publication_calendar_checked_at"))
+            if ((instant - checked).total_seconds() >= PUBLICATION_METADATA_TTL
+                    or pd.notna(calendar_checked) and (instant - calendar_checked).total_seconds() >= PUBLICATION_METADATA_TTL):
                 cache_state = "cached"
         row.update(quality=status, quality_detail=detail, observation_age_days=age if bucket != "cbo_projection" else None,
                    max_age_days=meta["max_age_days"], frequency=meta["frequency"],

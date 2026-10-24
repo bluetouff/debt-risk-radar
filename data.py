@@ -102,9 +102,31 @@ def _fred_publication(series_id, series, key):
     end, updated = validation.fred_publication(payload, series_id)
     if end != series.index[-1].tz_localize("UTC"):
         raise DataUnavailable("FRED publication metadata does not match the latest observation.")
-    return {"publication_observation_end": end.isoformat(), "publication_updated_at": updated.isoformat(),
+    evidence = {"publication_observation_end": end.isoformat(), "publication_updated_at": updated.isoformat(),
             "publication_checked_at": pd.Timestamp(fetched, unit="s", tz="UTC").isoformat(),
             "publication_frequency": "Q"}
+    release_id = next((meta.get("release_id") for _, ident, meta in iter_fred_catalog() if ident == series_id), None)
+    if release_id is not None:
+        try:
+            get_json_document("https://api.stlouisfed.org/fred/series/release",
+                ttl=24 * 3600, max_age=7 * 86400,
+                validator=lambda value: validation.fred_release(value, release_id),
+                params={"api_key": key, "series_id": series_id, "file_type": "json"})
+            calendar, checked = get_json_document("https://api.stlouisfed.org/fred/release/dates",
+                ttl=PUBLICATION_METADATA_TTL, max_age=PUBLICATION_METADATA_MAX_AGE,
+                validator=lambda value: validation.fred_release_dates(value, release_id),
+                params={"api_key": key, "release_id": release_id, "file_type": "json",
+                        "include_release_dates_with_no_data": "true", "sort_order": "asc", "limit": 10000})
+            dates = validation.fred_release_dates(calendar, release_id)
+            calendar_checked = pd.Timestamp(checked, unit="s", tz="UTC")
+            upcoming = dates[dates >= pd.Timestamp(calendar_checked.tz_convert("America/Chicago").date(), tz="UTC")]
+            if upcoming.empty:
+                raise DataUnavailable("No upcoming official FRED release date.")
+            evidence.update(publication_release_id=release_id, publication_next_release=upcoming[0].date().isoformat(),
+                            publication_calendar_checked_at=calendar_checked.isoformat())
+        except Exception as exc:
+            evidence["publication_calendar_error"] = _safe_error(exc)
+    return evidence
 
 
 @cache_data(ttl=6 * 3600, show_spinner=False)
@@ -466,7 +488,9 @@ def fred_metrics(all_data: Dict[str, pd.Series]) -> pd.DataFrame:
                 "rationale": meta["rationale"],
                 **{key: all_data[series_id].attrs.get(key) for key in (
                     "observation_checked_at", "publication_observation_end", "publication_updated_at",
-                    "publication_checked_at", "publication_frequency", "publication_error")},
+                    "publication_checked_at", "publication_frequency", "publication_error",
+                    "publication_release_id", "publication_next_release", "publication_calendar_checked_at",
+                    "publication_calendar_error")},
             }
         )
     return pd.DataFrame(rows)

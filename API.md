@@ -48,7 +48,7 @@ Chaque signal contient notamment `bucket`, `series_id`, `name`, `source`, `unit`
 `date`, `current`, `signed_z`, `risk_score`, `quality`, `quality_detail`, `eligible`,
 `frequency`, `observation_age_days` et `max_age_days`.
 
-La politique de fraicheur `quality.policy_version = "3"` conserve le schema `1.2`
+La politique de fraicheur `quality.policy_version = "4"` conserve le schema `1.2`
 et la formule economique `2.0`. Un signal trimestriel `quality = "official_delayed"`
 est eligible seulement avec confirmation FRED recente et respect des bornes
 decrites dans `METHODOLOGY.md`. Ce n'est pas une observation du jour.
@@ -72,7 +72,11 @@ originale `observation_checked_at`. `refresh.source_ttl_seconds` reste la cadenc
 Les champs additionnels des signaux sont `freshness_basis`, `freshness_limit_at`
 (limite d'age), `freshness_expires_at` (echeance effective incluant les caches),
 `observation_checked_at`, `publication_observation_end`, `publication_updated_at`,
-`publication_checked_at` et `publication_frequency`. Les champs de date sont
+`publication_checked_at`, `publication_frequency`, `publication_release_id`,
+`publication_next_release` et `publication_calendar_checked_at`. La base
+`verified_release_calendar` indique un calendrier officiel valide, lie a la serie.
+Les consommateurs doivent accepter `cached` pour les politiques 3 et 4, sans
+ignorer `valid_until`, la couverture ou les dates d'origine. Les champs de date sont
 des horodatages UTC, sinon `null` ; la frequence est `Q` et la base de fraicheur
 est un identifiant de politique.
 `valid_until` est borne par la premiere echeance effective courante, y compris

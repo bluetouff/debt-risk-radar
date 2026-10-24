@@ -46,6 +46,33 @@ def fred_publication(payload, series_id):
     return end, updated
 
 
+def fred_release(payload, release_id):
+    rows = payload.get("releases") if isinstance(payload, dict) else None
+    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or type(rows[0].get("id")) is not int or rows[0]["id"] != release_id):
+        raise DataUnavailable("FRED series/release identity mismatch.")
+    return release_id
+
+
+def fred_release_dates(payload, release_id):
+    rows = payload.get("release_dates") if isinstance(payload, dict) else None
+    if (not isinstance(rows, list) or not rows or type(payload.get("count")) is not int
+            or payload["count"] != len(rows) or type(payload.get("offset")) is not int
+            or payload["offset"] != 0 or len(rows) > 10000):
+        raise DataUnavailable("Incomplete FRED release calendar.")
+    dates = []
+    for row in rows:
+        if (not isinstance(row, dict) or type(row.get("release_id")) is not int
+                or row["release_id"] != release_id
+                or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(row.get("date", "")))):
+            raise DataUnavailable("Invalid FRED release calendar identity or date.")
+        dates.append(row["date"])
+    dates = pd.to_datetime(dates, errors="raise", utc=True)
+    if dates.isna().any() or dates.has_duplicates or not dates.is_monotonic_increasing:
+        raise DataUnavailable("Invalid or duplicate FRED release dates.")
+    return dates
+
+
 def world_bank(payload, country, indicator):
     if (not isinstance(payload, list) or len(payload) != 2
             or not isinstance(payload[0], dict) or not isinstance(payload[1], list)):

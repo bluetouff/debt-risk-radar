@@ -365,8 +365,13 @@ def render_faq_page() -> None:
             "aussi les métadonnées officielles, renouvelées toutes les six heures et réutilisables "
             "au maximum 48 heures depuis leur collecte en cas de panne. Une observation "
             "reste utilisable avec la mention **publication officielle différée** uniquement si elle "
-            "correspond au dernier trimestre annoncé par FRED, si la mise à jour de la série date "
-            "d'au plus 120 jours et si la fin du trimestre ne dépasse pas six mois plus 30 jours. "
+            "correspond au dernier trimestre annoncé par FRED. Pour les deux ratios dette/PIB, "
+            "le calendrier officiel de la publication est aussi vérifié : la prochaine date et "
+            "la fin du lendemain, en heure centrale américaine, peuvent prolonger la tolérance "
+            "de 240 jours depuis la mise à jour. "
+            "La preuve du calendrier expire après 48 heures et une observation ne peut dépasser "
+            "un an après la fin de son trimestre. Sans calendrier validé, les limites conservatrices "
+            "de 240 jours depuis la mise à jour et d'un an après la fin du trimestre restent applicables. "
             "Ces bornes sont une politique de surveillance, pas un engagement du fournisseur. "
             "Les réponses doivent toujours respecter leurs échéances de cache. La date de période "
             "et la valeur ne sont jamais modifiées ; une publication différée n'est pas une donnée du jour. "
@@ -526,6 +531,10 @@ if not delayed.empty:
             st.write(f"{row['name']} : période {row['date'].strftime('%Y-%m-%d')} ; "
                      f"mise à jour FRED {row['publication_updated_at']} ; "
                      f"métadonnées vérifiées {row['publication_checked_at']}.")
+            if pd.notna(row.get("publication_next_release")):
+                st.write(f"Prochaine publication annoncée : {row['publication_next_release']} "
+                         f"(calendrier vérifié {row['publication_calendar_checked_at']}) ; "
+                         f"échéance effective {row['freshness_expires_at']}.")
 if not unavailable.empty or issues:
     st.warning("Qualité des données dégradée. Les signaux indisponibles ne contribuent pas au score ; le score courant est suspendu si sa couverture est incomplète.")
     with st.expander("Signaux à vérifier", expanded=False):

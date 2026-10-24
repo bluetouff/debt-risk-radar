@@ -128,7 +128,8 @@ def metric_record(row: pd.Series) -> dict:
         "cache_max_age_seconds": json_value(row.get("cache_max_age_seconds")),
         **{key: json_value(row.get(key)) for key in (
             "observation_checked_at", "publication_observation_end", "publication_updated_at",
-            "publication_checked_at", "publication_frequency")},
+            "publication_checked_at", "publication_frequency", "publication_release_id",
+            "publication_next_release", "publication_calendar_checked_at")},
     }
 
 
@@ -298,7 +299,7 @@ def build_latest_payload(metrics: pd.DataFrame, buckets: pd.DataFrame, issues: l
                 and generated_at < row["freshness_limit_at"] <= generated_at + pd.Timedelta(days=PUBLICATION_WARNING_DAYS)
                 and row["frequency"] == "quarterly_period_start"
             ],
-            "note": "Cache renewal cadence is distinct from bounded reuse of validated responses. Original retrieval and observation dates are preserved; cached signals are explicit. Economic-age limits still apply. Quarterly publication evidence is bounded to 48 hours. CBO February 2026 vintage is pinned.",
+            "note": "Original retrieval and observation dates are preserved. Confirmed quarterly releases allow 240 days since update and at most one year after period end. Official calendar evidence can extend the 240-day bound, not the one-year bound. Observation, metadata and calendar evidence expire after 48 hours. Calendar dates are US Central, with one integration day. CBO February 2026 vintage is pinned.",
         },
         "sources": source_rows,
         "issues": [{"source": issue.source, "detail": issue.detail} for issue in issues],

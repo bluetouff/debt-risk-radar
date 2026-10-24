@@ -126,7 +126,7 @@ HTTP reussi ne prouve ni la version active ni la validite des donnees.
 
 ### Preparation de la methode 2.0
 
-Pour la politique de fraicheur 3, deployer ensemble `http_cache.py`, `data.py`,
+Pour la politique de fraicheur 4, deployer ensemble `http_cache.py`, `data.py`,
 `source_validation.py`, `quality.py`, `latest_export.py` et `app.py`, puis le
 consommateur l0g qui affiche `official-delayed` et `cached`. Ne pas effacer le cache
 ni provoquer une collecte manuelle. L'ancien cache est revalide a la lecture.

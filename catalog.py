@@ -8,6 +8,7 @@ a risk direction, a scoring bucket and a human-readable rationale.
 FRED_SERIES = {
     "fiscal": {
         "GFDEGDQ188S": {
+            "release_id": 263,
             "name": "Federal debt, total public debt / GDP",
             "unit": "% GDP",
             "direction": "up",
@@ -16,6 +17,7 @@ FRED_SERIES = {
             "rationale": "Debt stock relative to economic base.",
         },
         "FYGFGDQ188S": {
+            "release_id": 263,
             "name": "Federal debt held by the public / GDP",
             "unit": "% GDP",
             "direction": "up",

@@ -99,7 +99,7 @@ Un CBO absent degrade l'audit global mais ne suspend pas le score courant comple
 
 Ces tolerances ne garantissent pas la derniere publication. Les dates des observations
 ne sont pas des dates de collecte. L'horizon CBO 2056 n'est pas une date de fraicheur.
-La politique de fraicheur 3 separe deux delais reseau, comptes depuis la collecte
+La politique de fraicheur 4 separe deux delais reseau, comptes depuis la collecte
 initiale de chaque reponse validee :
 
 | Source | Cadence de renouvellement | Reutilisation maximale |
@@ -136,7 +136,8 @@ et exactement la derniere periode des observations collectees. La date FRED
 `last_updated` est la mise a jour de la serie, pas la date du trimestre et pas
 necessairement celle de sa premiere publication.
 
-Toutes ces conditions sont requises :
+La politique 3 initiale imposait toutes ces conditions (remplacees ci-dessous
+par les tolerances elargies de la politique 4) :
 - Observations et metadonnees collectees depuis moins de 48 heures ; au-dela de
   six heures, leur reutilisation porte aussi la mention de cache. Lire le cache
   ne modifie jamais ces dates.
@@ -152,6 +153,39 @@ par FRED. Au-dela, ou sans confirmation, le signal reste exclu. L'exception ne
 s'applique ni aux observations quotidiennes, ni aux valeurs invalides, ni aux
 historiques insuffisants. La formule, les poids et les 31 signaux restent ceux
 de la methode 2.0 ; `quality.policy_version` versionne cette regle separement.
+
+La politique 4 corrige une limite du mecanisme precedent : le 24 octobre 2026,
+la borne de 120 jours excluait les deux ratios alors que FRED confirmait toujours
+le T1 et annoncait le 29 octobre comme prochaine publication. Pour ces deux series,
+le collecteur valide aussi leur rattachement a la publication FRED 263 via
+`fred/series/release` et son calendrier via `fred/release/dates`.
+
+La tolerance est elargie a 240 jours depuis la derniere mise a jour et a un an
+apres la fin du trimestre. Une observation plus ancienne que le seuil ordinaire
+de 280 jours reste explicitement `official_delayed`, avec confirmation recente
+de la derniere periode officielle. Les autres frequences ne sont pas modifiees.
+
+Un calendrier complet et recent peut prolonger la borne de 240 jours, sans
+jamais depasser la limite d'un an apres la fin du trimestre :
+- Le prochain jour annonce borne l'attente jusqu'a la fin du lendemain en
+  heure centrale americaine. FRED precise qu'une date de publication n'est pas
+  une garantie de disponibilite sur son site.
+- Les observations, metadonnees et calendrier restent verifies depuis moins
+  de 48 heures, renouveles toutes les six heures et explicitement marques caches.
+- Le trimestre conserve une limite absolue d'un an apres sa fin. Aucune revision
+  ni consultation ne rajeunit sa periode, sa valeur ou ses dates de collecte.
+- Sans calendrier disponible, les bornes elargies de 240 jours et un an s'appliquent.
+  Une incoherence d'identifiant, une periode plus recente non collectee, une
+  preuve expiree ou une valeur invalide n'est jamais remplacee par une estimation.
+
+Le calendrier est commun aux deux ratios et partage le cache HTTP : environ quatre
+a cinq renouvellements par jour, pas une requete par visite ou par export. Le rattachement
+serie/publication est renouvele toutes les 24 heures. Les quotas, temporisations
+et pauses globales FRED existants s'appliquent aussi a ces requetes.
+
+Sources : [series/release](https://fred.stlouisfed.org/docs/api/fred/series_release.html),
+[release/dates](https://fred.stlouisfed.org/docs/api/fred/release_dates.html),
+[calendrier de la publication](https://fred.stlouisfed.org/releases/calendar?rid=263&y=2026).
 
 La publication differee est visible dans le dashboard et dans les consommateurs
 l0g. Le JSON fournit les horodatages, les bornes et les signaux qui approchent

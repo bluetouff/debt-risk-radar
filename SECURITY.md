@@ -71,7 +71,7 @@ imputation. La methode 2.0 et le schema JSON 1.2 sont explicites pour eviter une
 comparaison silencieuse avec l'ancien score. Voir `METHODOLOGY.md` et `API.md`.
 L'acces gratuit a FRED ne garantit pas les droits de redistribution des series tierces.
 
-La politique de fraicheur 3 utilise les memes hotes autorises,
+La politique de fraicheur 4 utilise les memes hotes autorises,
 plafonds, verrous, pauses et redaction des secrets. `source_validation.py` valide
 les formats, identifiants, dates, doublons et valeurs avant tout remplacement du cache.
 Le JSON non fini est rejete. Les archives BIS gardent leur plafond de decompression.

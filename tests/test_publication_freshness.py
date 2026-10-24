@@ -35,6 +35,12 @@ class PreciseDateTime(datetime):
         return cls(2026, 10, 9, 6, 10, 12, 500000, tzinfo=timezone.utc).astimezone(tz)
 
 
+class ExpiryDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2027, 2, 7, 5, 20, tzinfo=timezone.utc).astimezone(tz)
+
+
 def incident_metrics(confirmed=True, checked=NOW):
     raw = complete_metrics("2026-10-09")
     raw["observation_checked_at"] = NOW
@@ -89,7 +95,7 @@ class PublicationFreshnessTests(unittest.TestCase):
     def test_mismatched_missing_old_or_future_evidence_fails_closed(self):
         cases = (("publication_observation_end", "2026-04-01"), ("publication_frequency", "M"),
                  ("publication_updated_at", None), ("publication_updated_at", "2026-10-10"),
-                 ("publication_updated_at", "2026-01-02"), ("publication_updated_at", "2026-06-01"),
+                 ("publication_updated_at", "2026-01-02"),
                  ("publication_checked_at", "2026-10-07T05:20:00Z"),
                  ("publication_checked_at", "2026-10-09T05:21:00Z"),
                  ("observation_checked_at", "2026-10-07T05:20:00Z"),
@@ -106,8 +112,8 @@ class PublicationFreshnessTests(unittest.TestCase):
     def test_revision_cannot_keep_an_old_quarter_alive(self):
         raw = incident_metrics()
         mask = raw.series_id.isin(RATIOS)
-        raw.loc[mask, "date"] = pd.Timestamp("2025-10-01")
-        raw.loc[mask, "publication_observation_end"] = "2025-10-01T00:00:00Z"
+        raw.loc[mask, "date"] = pd.Timestamp("2024-10-01")
+        raw.loc[mask, "publication_observation_end"] = "2024-10-01T00:00:00Z"
         raw.loc[mask, "publication_updated_at"] = "2026-10-08T00:00:00Z"
         self.assertFalse(assess_metrics(raw, now=NOW).loc[mask, "eligible"].any())
 
@@ -135,7 +141,7 @@ class PublicationFreshnessTests(unittest.TestCase):
         pd.testing.assert_frame_equal(first, second)
 
     def test_publication_exception_also_expires_with_fresh_http_responses(self):
-        for day, eligible in (("2026-10-23", True), ("2026-10-24", False)):
+        for day, eligible in (("2027-02-20", True), ("2027-02-21", False)):
             now = day + "T05:20:00Z"
             checked = assess_metrics(incident_metrics(checked=now), now=now)
             self.assertEqual(checked.query("series_id == 'GFDEGDQ188S'").iloc[0].eligible, eligible)
@@ -151,12 +157,12 @@ class PublicationFreshnessTests(unittest.TestCase):
         json.dumps(result, allow_nan=False)
 
     def test_export_warns_before_the_next_hard_age_limit(self):
-        raw = incident_metrics()
+        raw = incident_metrics(checked="2027-02-07T05:20:00Z")
         raw.loc[raw.series_id.isin(RATIOS), "publication_updated_at"] = "2026-06-24T13:01:00Z"
-        with patch("latest_export.datetime", FixedDateTime):
+        with patch("latest_export.datetime", ExpiryDateTime):
             result = latest_export.build_latest_payload(raw, pd.DataFrame(), [])
         self.assertEqual([row["series_id"] for row in result["quality"]["expiring_signals"]], list(RATIOS))
-        self.assertEqual(result["quality"]["expiring_signals"][0]["limit_at"], "2026-10-23T00:00:00+00:00")
+        self.assertEqual(result["quality"]["expiring_signals"][0]["limit_at"], "2027-02-20T00:00:00+00:00")
 
     def test_export_keeps_subsecond_confirmation_before_generation(self):
         raw = incident_metrics(checked="2026-10-09T06:10:12.085284948Z")
@@ -195,11 +201,13 @@ class PublicationFreshnessTests(unittest.TestCase):
         fetched = pd.Timestamp(NOW).timestamp()
         with patch("data.fred_key_available", return_value=True), patch("data._streamlit_secret", return_value=None), \
                 patch("data.iter_fred_catalog", return_value=[("fiscal", RATIOS[0], data.FRED_SERIES["fiscal"][RATIOS[0]])]), \
-                patch("data.get_json_document", side_effect=[(payload, fetched), (metadata, fetched)]) as get:
+                patch("data.get_json_document", side_effect=[(payload, fetched), (metadata, fetched),
+                    ({"releases": [{"id": 263}]}, fetched),
+                    ({"count": 1, "offset": 0, "release_dates": [{"release_id": 263, "date": "2026-10-29"}]}, fetched)]) as get:
             series, issues = data.fetch_fred_series()
             rows = data.fred_metrics(series)
         self.assertEqual(issues, [])
-        self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_count, 4)
         checked = assess_metrics(rows, now=NOW).query("series_id == 'GFDEGDQ188S'").iloc[0]
         self.assertEqual(checked.quality, "official_delayed")
         self.assertTrue(np.isfinite(checked.risk_score))

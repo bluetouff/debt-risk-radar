@@ -7,9 +7,11 @@ repose sur Treasury, FRED, BIS et World Bank : 31 signaux courants requis, plus 
 projections CBO structurelles separees. Elle ne collecte plus de prix d'ETF Massive.
 Ce changement rompt la comparabilite avec l'ancien score incluant les ETF.
 
-La politique de fraicheur 3 distingue la cadence de renouvellement, la limite de
+La politique de fraicheur 4 distingue la cadence de renouvellement, la limite de
 reutilisation d'une reponse validee et l'age de l'observation economique. Une panne
 reseau ne supprime plus une observation au seul passage du delai de renouvellement.
+Les trimestres confirmes disposent de 240 jours depuis leur mise a jour, bornes
+a un an apres leur fin ; le calendrier officiel FRED peut completer cette preuve.
 Le cache reutilise et les publications trimestrielles differees restent explicites,
 avec leurs dates d'origine et des limites fermes. Voir [METHODOLOGY.md](METHODOLOGY.md)
 et [API.md](API.md).
